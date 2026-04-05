@@ -7,54 +7,56 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 # --- WEB SUNUCUSU ---
 app = Flask(__name__)
 @app.route('/')
-def home(): return "IRVUS SISTEM ONLINE", 200
+def home(): return "IRVUS BOT ONLINE", 200
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# --- AYARLAR ---
+# --- AYARLAR & GERÇEK LİNKLER ---
 TOKEN = "8621050385:AAESXIZLT6HbS3CGeT-sT-HJcgvFuJF8ff0" 
 TOKEN_ADRESI = "0x31EDA2dfd01c9C65385cCE6099B24b06ef3aE831"
 HF_TOKEN = "Hf_VzFKUkIElGkRTDWwEwLPwPPOOmwWwwBqNq"
 HF_API_URL = "https://api-inference.huggingface.co/models/runwayml/stable-diffusion-v1-5"
 
-# Logo URL (Buraya logonun internetteki direkt linkini koyabilirsin, geçici olarak bir örnek koydum)
+# --- SENİN LİNKLERİN ---
+WEB_SITESI = "https://www.irvustoken.xyz"
+X_ADRESI = "https://x.com/irvustoken"
+# Paylaştığın logoyu kullanıyoruz
 LOGO_URL = "https://raw.githubusercontent.com/irvus-project/assets/main/logo.jpg" 
 
 # --- FONKSİYONLAR ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = (
+    welcome_text = (
         "💎 **Irvus Token Dünyasına Hoş Geldiniz!**\n\n"
-        "Irvus AI botu ile anlık fiyat takibi yapabilir ve yapay zeka ile hayalinizdeki görselleri oluşturabilirsiniz.\n\n"
-        "📜 **Komutlar:**\n"
-        "🔹 `/fiyat` - Güncel $IRVUS verilerini getirir.\n"
-        "🔹 `/ciz [kelime]` - Yapay zeka ile görsel oluşturur.\n\n"
-        "Aşağıdaki butonları kullanarak topluluğumuza katılabilirsiniz! 👇"
+        "Ben **Irvus AI**, topluluğumuzun hem finans hem de sanat asistanıyım. "
+        "Aşağıdaki komutlarla beni kullanmaya başlayabilirsiniz:\n\n"
+        "📊 `/fiyat` - Güncel $IRVUS verilerini getirir.\n"
+        "🎨 `/ciz [kelime]` - Hayalinizdeki görseli Irvus AI ile oluşturur.\n\n"
+        "**Resmi Bağlantılarımız:**"
     )
     
-    # Butonlar
     keyboard = [
         [
-            InlineKeyboardButton("🌐 Web Sitesi", url="https://irvus.io"), # Burayı kendi sitenle değiştir
-            InlineKeyboardButton("🐦 X (Twitter)", url="https://x.com/irvustoken") # Burayı kendi X adresinle değiştir
+            InlineKeyboardButton("🌐 Web Sitesi", url=WEB_SITESI),
+            InlineKeyboardButton("🐦 X (Twitter)", url=X_ADRESI)
         ],
-        [InlineKeyboardButton("📊 Grafik (DexScreener)", url=f"https://dexscreener.com/base/{TOKEN_ADRESI}")]
+        [
+            InlineKeyboardButton("📈 Canlı Grafik (Base)", url=f"https://dexscreener.com/base/{TOKEN_ADRESI}")
+        ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     try:
-        # Resimli mesaj gönderimi
         await update.message.reply_photo(
             photo=LOGO_URL, 
-            caption=msg, 
+            caption=welcome_text, 
             reply_markup=reply_markup, 
             parse_mode='Markdown'
         )
     except:
-        # Resim yüklenemezse sadece metin gönder
-        await update.message.reply_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+        await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def fiyat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -87,7 +89,7 @@ async def ciz_islemi(update, prompt):
 
 async def ciz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = " ".join(context.args)
-    if not prompt: return await update.message.reply_text("❌ Örn: `/ciz siberpunk şehir` ")
+    if not prompt: return await update.message.reply_text("❌ Örn: `/ciz irvus moon` ")
     await update.message.reply_text(f"🎨 **'{prompt}'** hazırlanıyor...")
     asyncio.create_task(ciz_islemi(update, prompt))
 
@@ -96,7 +98,6 @@ async def main():
     Thread(target=run_web, daemon=True).start()
     application = ApplicationBuilder().token(TOKEN).build()
     
-    # Komut Kayıtları
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler(["fiyat", "p"], fiyat))
     application.add_handler(CommandHandler(["ciz", "draw"], ciz))
