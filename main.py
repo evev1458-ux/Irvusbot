@@ -4,7 +4,7 @@ from threading import Thread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# --- 1. WEB SUNUCUSU (Render'ın botu kapatmaması için) ---
+# --- 1. WEB SUNUCUSU ---
 app = Flask(__name__)
 @app.route('/')
 def home(): return "IRVUS SISTEM ONLINE", 200
@@ -19,9 +19,9 @@ CA_ADRESI = "0x31EDA2dfd01c9C65385cCE6099B24b06ef3aE831"
 HF_TOKEN = "Hf_VzFKUkIElGkRTDWwEwLPwPPOOmwWwwBqNq"
 HF_API_URL = "https://api-inference.huggingface.co/models/runwayml/stable-diffusion-v1-5"
 
-# Sosyal Medya ve Logo
-WEB_SITESI = "https://www.irvustoken.xyz"
+# Güncel Adreslerin (Tam verdiğin şekilde)
 X_ADRESI = "https://x.com/IRVUSTOKEN"
+WEB_SITESI = "https://www.irvustoken.xyz"
 LOGO_URL = "https://raw.githubusercontent.com/irvus-project/assets/main/logo.jpg" 
 
 # --- 3. FONKSİYONLAR ---
@@ -29,11 +29,11 @@ LOGO_URL = "https://raw.githubusercontent.com/irvus-project/assets/main/logo.jpg
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
         "💎 **Irvus Token Dünyasına Hoş Geldiniz!**\n\n"
-        "Ben **Irvus AI**, topluluğumuzun hem finans hem de sanat asistanıyım.\n\n"
+        "Ben **Irvus AI**, topluluğumuzun finans ve sanat asistanıyım.\n\n"
         f"📄 **Kontrat Adresi (Base):**\n`{CA_ADRESI}`\n\n"
         "🚀 **Komutlar:**\n"
-        "🔹 `/fiyat` - Güncel $IRVUS verilerini getirir.\n"
-        "🔹 `/ciz [kelime]` - Yapay zeka ile görsel oluşturur.\n\n"
+        "🔹 `/fiyat` - Anlık $IRVUS verileri.\n"
+        "🔹 `/ciz [kelime]` - AI Görsel oluşturma.\n\n"
         "**Resmi Bağlantılarımız:**"
     )
     
@@ -43,7 +43,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🐦 X (Twitter)", url=X_ADRESI)
         ],
         [
-            InlineKeyboardButton("📈 Canlı Grafik (Base)", url=f"https://dexscreener.com/base/{CA_ADRESI}")
+            InlineKeyboardButton("📊 Canlı Grafik (Base)", url=f"https://dexscreener.com/base/{CA_ADRESI}")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -55,19 +55,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def fiyat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        # Base ağı için garantili DexScreener sorgusu
+        # Sorguyu hem 'pairs' hem 'pair' olarak kontrol eden geliştirilmiş yapı
         url = f"https://api.dexscreener.com/latest/dex/pairs/base/{CA_ADRESI}"
-        response = requests.get(url, timeout=15)
-        data = response.json()
+        res = requests.get(url, timeout=15).json()
         
-        # Veri yapısını kontrol et
-        p = data.get('pair') or (data.get('pairs')[0] if data.get('pairs') else None)
-        
-        if not p:
-            return await update.message.reply_text("❌ Veri bulunamadı. Lütfen CA kontrol edin.")
+        pair_data = None
+        if res.get('pairs'):
+            pair_data = res['pairs'][0]
+        elif res.get('pair'):
+            pair_data = res['pair']
 
-        f_usd = p.get('priceUsd', '0.00')
-        degisim = p.get('priceChange', {}).get('h24', '0')
+        if not pair_data:
+            return await update.message.reply_text("❌ Fiyat verisi şu an DexScreener'da bulunamadı.")
+
+        f_usd = pair_data.get('priceUsd', 'Hesaplanıyor...')
+        degisim = pair_data.get('priceChange', {}).get('h24', '0')
+        g_url = pair_data.get('url', f"https://dexscreener.com/base/{CA_ADRESI}")
 
         msg = (f"💎 **$IRVUS Güncel Durum**\n"
                f"━━━━━━━━━━━━━━━━━━\n"
@@ -75,57 +78,50 @@ async def fiyat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                f"📈 24s Değişim: `%{degisim}`\n"
                f"━━━━━━━━━━━━━━━━━━")
         
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("📊 Grafiği Görüntüle", url=p.get('url'))]])
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("📊 Grafiği Görüntüle", url=g_url)]])
         await update.message.reply_text(msg, reply_markup=kb, parse_mode='Markdown')
-    except:
-        await update.message.reply_text("⚠️ DexScreener şu an yoğun, lütfen az sonra tekrar deneyin.")
+    except Exception as e:
+        print(f"Fiyat Hatası: {e}")
+        await update.message.reply_text("⚠️ Veri çekilirken bir hata oluştu, lütfen birazdan tekrar deneyin.")
 
 async def ciz_islemi(update, prompt):
     try:
         headers = {"Authorization": f"Bearer {HF_TOKEN}"}
         response = requests.post(HF_API_URL, headers=headers, json={"inputs": prompt}, timeout=30)
-        
         if response.status_code == 200:
             await update.message.reply_photo(photo=response.content, caption=f"🖼 **Irvus AI:** {prompt}")
         else:
-            # Hugging Face meşgulse yedek motor (Pollinations)
             url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ', '%20')}?nologo=true"
             await update.message.reply_photo(photo=url, caption=f"🖼 **Irvus AI (Yedek):** {prompt}")
     except:
-        await update.message.reply_text("❌ Çizim şu an yapılamıyor.")
+        await update.message.reply_text("❌ Çizim servisi şu an meşgul.")
 
 async def ciz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = " ".join(context.args)
-    if not prompt: return await update.message.reply_text("❌ Örn: `/ciz siberpunk aslan` ")
+    if not prompt: return await update.message.reply_text("❌ Kullanım: `/ciz aslan` ")
     await update.message.reply_text(f"🎨 **'{prompt}'** hazırlanıyor...")
     asyncio.create_task(ciz_islemi(update, prompt))
 
-# --- 4. ANA MOTOR (Python 3.14 Uyumlu Asenkron Yapı) ---
-async def main_async():
-    # Flask sunucusunu başlat
+# --- 4. ANA MOTOR ---
+async def main():
     Thread(target=run_web, daemon=True).start()
-    
-    # Botu oluştur
     application = ApplicationBuilder().token(TOKEN).build()
     
-    # Komutları kaydet
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler(["fiyat", "p"], fiyat))
     application.add_handler(CommandHandler(["ciz", "draw"], ciz))
     
-    # Botu asenkron olarak başlat
     async with application:
         await application.initialize()
         await application.start()
         print(">>> IRVUS BOT AKTIF")
         await application.updater.start_polling(drop_pending_updates=True)
-        # Botun açık kalmasını sağla
         while True:
             await asyncio.sleep(3600)
 
 if __name__ == '__main__':
     try:
-        asyncio.run(main_async())
+        asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         pass
         
