@@ -1,80 +1,68 @@
-import os
-import logging
-import aiohttp
-import io
+import os, requests, asyncio
 from flask import Flask
 from threading import Thread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters, CommandHandler
+from telegram.ext import Application, CommandHandler, ContextTypes
 
-# --- AYARLAR ---
-TOKEN = "8621050385:AAESXIZLT6HbS3CGeT-sT-HJcgvFuJF8ff0"
-IRVUS_CA = "0x31EDA2dfd01c9C65385cCE6099B24b06ef3aE831"
-HF_TOKEN = "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"
-
-# YENİ GÜNCEL ADRES (Hata veren yeri burasıyla değiştirdik)
-HF_API_URL = "https://router.huggingface.co/hf-inference/models/stabilityai/stable-diffusion-2-1"
-HF_HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"}
-
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-
-app = Flask('')
+# --- WEB SUNUCUSU ---
+app = Flask(__name__)
 @app.route('/')
-def home(): return "Bot Aktif!"
+def home(): return "IRVUS BOT AKTIF", 200
 
-def run_web_server():
-    port = int(os.environ.get("PORT", 8080))
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-async def fiyat_gonder(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = f"https://api.dexscreener.com/latest/dex/tokens/{IRVUS_CA}"
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(url, timeout=10) as resp:
-                data = await resp.json()
-                pairs = data.get("pairs")
-                if pairs:
-                    pair = pairs[0]
-                    price = pair.get("priceUsd", "0")
-                    change = pair.get("priceChange", {}).get("h24", "0")
-                    text = f"💎 **Irvus Token ($IRVUS)**\n━━━━━━━━━━━━━━━━━━━━\n💵 **Fiyat:** `${float(price):.10f}`\n📈 **24s Değişim:** `%{change}`\n━━━━━━━━━━━━━━━━━━━━"
-                    keyboard = [[InlineKeyboardButton("📊 DexScreener Grafiği", url=pair.get("url"))]]
-                    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard), disable_web_page_preview=True)
-                else:
-                    await update.message.reply_text("❌ Veri bulunamadı. Likidite kontrol ediliyor...")
-        except Exception as e:
-            await update.message.reply_text(f"⚠️ Bağlantı hatası: {str(e)}")
+# --- AYARLAR ---
+TOKEN = "8621050385:AAGA6wcxbFY2rqJ9gjXVK_JNqsebJvTv_Jo"
+TOKEN_ADRESI = "0x31EDA2dfd01c9C65385cCE6099B24b06ef3aE831"
+# Hugging Face API Ayarı (En kaliteli model)
+HF_API_URL = "https://api-inference.huggingface.co/models/runwayml/stable-diffusion-v1-5"
+HF_TOKEN = "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" # Senin verdiğin token
+headers = {"Authorization": f"Bearer {HF_TOKEN}"}
 
-async def ciz_gonder(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# --- FONKSİYONLAR ---
+
+async def fiyat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        r = requests.get(f"https://api.dexscreener.com/latest/dex/tokens/{TOKEN_ADRESI}", timeout=5).json()
+        p = r['pairs'][0]
+        msg = f"💎 **$IRVUS Güncel Durum**\n\n💰 Fiyat: `${p.get('priceUsd')}`\n📈 24s: `%{p.get('priceChange', {}).get('h24')}`"
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("📈 Grafik", url=p.get('url'))]])
+        await update.message.reply_text(msg, reply_markup=kb, parse_mode='Markdown')
+    except:
+        await update.message.reply_text("❌ Fiyat verisi şu an çekilemedi.")
+
+async def ciz_islemi(update, prompt):
+    try:
+        # Hugging Face API'ye istek atıyoruz
+        response = requests.post(HF_API_URL, headers=headers, json={"inputs": prompt}, timeout=30)
+        if response.status_code == 200:
+            await update.message.reply_photo(photo=response.content, caption=f"🖼 **IRVUS AI:** {prompt}")
+        else:
+            # API meşgulse hızlı motora pasla (Yedek plan)
+            url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ', '%20')}?nologo=true"
+            await update.message.reply_photo(photo=url, caption=f"🖼 **AI (Yedek):** {prompt}")
+    except:
+        await update.message.reply_text("❌ Çizim sırasında bir hata oluştu.")
+
+async def ciz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = " ".join(context.args)
     if not prompt:
-        await update.message.reply_text("⚠️ Örn: `/ciz cat in space`")
+        await update.message.reply_text("❌ Örn: `/ciz blue dragon`")
         return
-
-    msg = await update.message.reply_text("🎨 Resim çiziliyor, lütfen bekleyin...")
     
-    async with aiohttp.ClientSession() as session:
-        try:
-            # Yeni Router URL'sini kullanıyoruz
-            async with session.post(HF_API_URL, headers=HF_HEADERS, json={"inputs": prompt}, timeout=60) as resp:
-                if resp.status == 200:
-                    img_data = await resp.read()
-                    await update.message.reply_photo(photo=io.BytesIO(img_data), caption=f"✨ `{prompt}`")
-                    await msg.delete()
-                elif resp.status == 503:
-                    await msg.edit_text("⏳ Model uyanıyor... 15 saniye sonra tekrar deneyin.")
-                else:
-                    err_resp = await resp.text()
-                    await msg.edit_text(f"❌ Hata ({resp.status}): Sunucu yanıt vermedi.")
-        except Exception as e:
-            await msg.edit_text(f"⚠️ Hata: {str(e)}")
+    await update.message.reply_text(f"🎨 **'{prompt}'** Hugging Face ile çiziliyor...")
+    # Arka planda çalıştır (Bot donmasın)
+    asyncio.create_task(ciz_islemi(update, prompt))
 
+# --- ÇALIŞTIRICI ---
 if __name__ == '__main__':
-    Thread(target=run_web_server).start()
-    app_bot = ApplicationBuilder().token(TOKEN).build()
-    app_bot.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("Bot Aktif! /fiyat veya /ciz yazabilirsin.")))
-    app_bot.add_handler(CommandHandler("fiyat", fiyat_gonder))
-    app_bot.add_handler(CommandHandler("ciz", ciz_gonder))
-    app_bot.add_handler(MessageHandler(filters.Regex(r"(?i)fiyat"), fiyat_gonder))
-    app_bot.run_polling()
+    Thread(target=run_web, daemon=True).start()
+    # Buradaki 'Application' yapısı Render'da 3.10 sürümünde hatasız çalışır
+    application = Application.builder().token(TOKEN).build()
+    application.add_handler(CommandHandler(["fiyat", "p"], fiyat))
+    application.add_handler(CommandHandler(["ciz", "draw"], ciz))
+    print(">>> BOT BASLATILDI")
+    application.run_polling(drop_pending_updates=True)
     
