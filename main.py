@@ -4,10 +4,10 @@ from threading import Thread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# --- 1. RENDER İÇİN WEB SUNUCUSU ---
+# --- 1. WEB SUNUCUSU ---
 app = Flask(__name__)
 @app.route('/')
-def home(): return "IRVUS FULL SYSTEM ACTIVE", 200
+def home(): return "IRVUS ON-CHAIN PRO ACTIVE", 200
 
 # --- 2. AYARLAR ---
 TOKEN = "8621050385:AAHIB0lWjzkDtgb2XJq32YmOg5Ggb_pZFZg"
@@ -15,105 +15,89 @@ CA_ADRESI = "0x31EDA2dfd01c9C65385cCE6099B24b06ef3aE831"
 ANA_GRUP_ID = "-1002393767346"
 LOGO_URL = "https://raw.githubusercontent.com/irvus-project/assets/main/logo.jpg"
 
-# --- 3. YARDIMCI FONKSİYONLAR ---
-def get_safe(url):
+BASE_RPC = "https://mainnet.base.org"
+# Swap Event Topic
+SWAP_TOPIC = "0xc42079f94a1d5046247098a76b0b302c30b6531398e0a8118d34346e27b13280"
+
+# --- 3. YARDIMCI VERİ ÇEKİCİ ---
+def get_price():
+    """Hesaplama için anlık fiyatı çeker"""
     try:
-        r = requests.get(url, timeout=12)
-        return r.json() if r.status_code == 200 else None
+        r = requests.get(f"https://api.dexscreener.com/latest/dex/pairs/base/{CA_ADRESI}", timeout=5).json()
+        return float(r['pair']['priceUsd'])
     except: return None
 
 # --- 4. KOMUTLAR ---
+async def start(update, context):
+    await update.message.reply_photo(photo=LOGO_URL, caption="💎 **Irvus On-Chain İzleyici Aktif!**\nSaniyeler içinde alım takibi devrede.")
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """İstediğin logolu ve butonlu karşılama ekranı"""
-    text = (f"💎 **Irvus AI Dünyasına Hoş Geldiniz!**\n\n"
-            f"Alım takibi, fiyat bilgisi ve çizim desteği aktiftir.\n\n"
-            f"📄 **CA:** `{CA_ADRESI}`")
-    
-    kb = [
-        [InlineKeyboardButton("🌐 Web Sitesi", url="https://www.irvustoken.xyz"), 
-         InlineKeyboardButton("🐦 X (Twitter)", url="https://x.com/IRVUSTOKEN")],
-        [InlineKeyboardButton("📊 Canlı Grafik", url=f"https://dexscreener.com/base/{CA_ADRESI}")]
-    ]
-    
-    # Görsel ile beraber gönderiyoruz
-    await update.message.reply_photo(
-        photo=LOGO_URL, 
-        caption=text, 
-        reply_markup=InlineKeyboardMarkup(kb), 
-        parse_mode='Markdown'
-    )
+# --- 5. GELİŞMİŞ AĞ TAKİP MOTORU ---
+async def track_onchain(context: ContextTypes.DEFAULT_TYPE):
+    last_block = 0
+    print(">>> Irvus On-Chain Engine Başlatıldı...")
 
-async def fiyat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Fiyat bilgilerini gösterir"""
-    data = get_safe(f"https://api.dexscreener.com/latest/dex/search?q={CA_ADRESI}")
-    if data and 'pairs' in data:
-        p = next((x for x in data['pairs'] if x['chainId'] == 'base'), None)
-        if p:
-            mcap = float(p.get('fdv', 0)) / 1000
-            msg = (f"💰 **Irvus Fiyat:** `${p['priceUsd']}`\n"
-                   f"📈 **24s Değişim:** %{p['priceChange']['h24']}\n"
-                   f"📊 **Market Cap:** `${mcap:.1f}K`\n"
-                   f"💧 **Likidite:** `${p.get('liquidity', {}).get('usd', 0):,.0f}`")
-            return await update.message.reply_text(msg)
-    await update.message.reply_text("⚠️ Veri şu an güncellenemedi, lütfen tekrar deneyin.")
-
-async def ciz(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Yapay zeka çizimi yapar"""
-    prompt = " ".join(context.args)
-    if not prompt: 
-        return await update.message.reply_text("❌ Kullanım: `/ciz uzayda bir aslan` ")
-    
-    await update.message.reply_text("🎨 Resmin hazırlanıyor, lütfen bekle...")
-    img_url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ', '%20')}?seed={int(time.time())}"
-    await update.message.reply_photo(photo=img_url, caption=f"🖼 **Irvus AI Sanat:** `{prompt}`")
-
-# --- 5. ALIM TAKİBİ (MIN 5$) ---
-async def track_buys(context: ContextTypes.DEFAULT_TYPE):
-    """Alımları arka planda sürekli kontrol eder"""
-    last_buys = 0
     while True:
-        data = get_safe(f"https://api.dexscreener.com/latest/dex/pairs/base/{CA_ADRESI}")
-        if data and 'pair' in data:
-            pair = data['pair']
-            cur_buys = pair.get('txns', {}).get('m5', {}).get('buys', 0)
-            
-            if last_buys != 0 and cur_buys > last_buys:
-                vol = float(pair.get('volume', {}).get('m5', 0))
-                if vol >= 5.0:
-                    price = pair.get('priceUsd', '0')
-                    msg = (f"🚀 **YENİ ALIM!** 🟢\n━━━━━━━━━━━━━━\n"
-                           f"💰 **Fiyat:** `${price}`\n"
-                           f"💵 **Hacim (5dk):** `${vol:.2f}`\n"
-                           f"━━━━━━━━━━━━━━\n"
-                           f"💎 [Grafik](https://dexscreener.com/base/{CA_ADRESI})")
-                    try: await context.bot.send_photo(chat_id=ANA_GRUP_ID, photo=LOGO_URL, caption=msg)
-                    except: pass
-            last_buys = cur_buys
-        await asyncio.sleep(30)
+        try:
+            # Güncel blok numarasını al
+            res_block = requests.post(BASE_RPC, json={"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}).json()
+            current_block = int(res_block["result"], 16)
 
-# --- 6. ANA MOTOR ---
+            if last_block == 0:
+                last_block = current_block - 1
+
+            if current_block > last_block:
+                payload = {
+                    "jsonrpc": "2.0", "method": "eth_getLogs",
+                    "params": [{
+                        "fromBlock": hex(last_block + 1), "toBlock": hex(current_block),
+                        "address": CA_ADRESI, "topics": [SWAP_TOPIC]
+                    }], "id": 1
+                }
+                logs = requests.post(BASE_RPC, json=payload).json().get("result", [])
+
+                for log in logs:
+                    # Log datasından alınan miktarı çıkar (Basitleştirilmiş HEX decoding)
+                    # Not: Uniswap V3 log yapısına göre data kısmından miktar çekilir.
+                    data_hex = log["data"][2:]
+                    # Alınan miktar genellikle logun son kısımlarındadır (18 decimal varsayımı)
+                    amount_raw = int(data_hex[-64:], 16) / 10**18 
+                    
+                    if amount_raw > 0:
+                        current_price = get_price()
+                        if current_price:
+                            usd_value = amount_raw * current_price
+                            
+                            # 5 DOLAR FİLTRESİ
+                            if usd_value >= 5.0:
+                                tx_hash = log["transactionHash"]
+                                msg = (
+                                    f"🚀 **YENİ $IRVUS ALIMI!** 🟢\n"
+                                    f"━━━━━━━━━━━━━━\n"
+                                    f"💰 **Harcana:** `${usd_value:.2f}`\n"
+                                    f"💎 **Alınan:** `{amount_raw:,.0f} IRVUS`\n"
+                                    f"🏷 **Fiyat:** `${current_price}`\n"
+                                    f"━━━━━━━━━━━━━━\n"
+                                    f"🔗 [Basescan](https://basescan.org/tx/{tx_hash})"
+                                )
+                                try:
+                                    await context.bot.send_photo(chat_id=ANA_GRUP_ID, photo=LOGO_URL, caption=msg, parse_mode='Markdown')
+                                except: pass
+
+                last_block = current_block
+        except: pass
+        await asyncio.sleep(4) # 4 saniyede bir blok tarar
+
 async def main():
-    # Flask sunucusu (Render için)
     Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000))), daemon=True).start()
-    
-    # Bot Kurulumu
-    application = ApplicationBuilder().token(TOKEN).build()
-    
-    # Komutları Tanımla
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler(["fiyat", "p"], fiyat))
-    application.add_handler(CommandHandler(["ciz", "draw"], ciz))
-    
-    async with application:
-        await application.initialize()
-        await application.start()
-        # Arka planda alım takibi görevini bağımsız başlat (JobQueue hatasını aşmak için)
-        asyncio.create_task(track_buys(application))
-        await application.updater.start_polling(drop_pending_updates=True)
+    bot = ApplicationBuilder().token(TOKEN).build()
+    bot.add_handler(CommandHandler("start", start))
+    async with bot:
+        await bot.initialize()
+        await bot.start()
+        asyncio.create_task(track_onchain(bot))
+        await bot.updater.start_polling(drop_pending_updates=True)
         while True: await asyncio.sleep(3600)
 
 if __name__ == '__main__':
-    try: asyncio.run(main())
-    except: pass
+    asyncio.run(main())
     
