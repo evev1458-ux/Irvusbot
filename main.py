@@ -1,85 +1,147 @@
 import os
-import requests
-import asyncio
 import time
+import requests
 from flask import Flask
 from threading import Thread
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# --- 1. WEB SUNUCUSU (7/24 Uyanık Tutmak İçin) ---
+# =========================
+# 🔐 TELEGRAM BİLGİLERİ
+# =========================
+
+TOKEN = 8621050385:AAHIB0lWjzkDtgb2XJq32YmOg5Ggb_pZFZg"
+CHAT_ID = `-1002393767346`"
+
+# =========================
+# ⚙️ TOKEN / NETWORK
+# =========================
+
+CA_ADRESI = "0x31EDA2dfd01c9C65385cCE6099B24b06ef3aE831"
+BASE_RPC = "https://mainnet.base.org"
+
+LAST_BLOCK = 0
+
+# =========================
+# 🌐 FLASK (Render awake)
+# =========================
+
 app = Flask(__name__)
 
-@app.route('/')
-def home(): 
-    return "IRVUS SISTEM ONLINE", 200
+@app.route("/")
+def home():
+    return "IRVUS BOT ONLINE", 200
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host="0.0.0.0", port=port)
 
-# --- 2. SABİT AYARLAR VE LİNKLER ---
-TOKEN = "8621050385:AAHAySA0SXbAP4G0KwcnCKGLkYs2yf-OeQU" 
-CA_ADRESI = "0x31EDA2dfd01c9C65385cCE6099B24b06ef3aE831"
-HF_TOKEN = "Hf_VzFKUkIElGkRTDWwEwLPwPPOOmwWwwBqNq"
-HF_API_URL = "https://api-inference.huggingface.co/models/runwayml/stable-diffusion-v1-5"
+# =========================
+# 📩 TELEGRAM SEND
+# =========================
 
-X_ADRESI = "https://x.com/IRVUSTOKEN"
-WEB_SITESI = "https://www.irvustoken.xyz"
-LOGO_URL = "https://raw.githubusercontent.com/irvus-project/assets/main/logo.jpg" 
+def send_telegram(msg):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    data = {
+        "chat_id": CHAT_ID,
+        "text": msg
+    }
+    try:
+        requests.post(url, data=data, timeout=10)
+    except:
+        pass
 
-LAST_PRICE_DATA = {"price": "0.00", "change": "0", "time": 0}
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+# =========================
+# 🔍 BLOCK CHECK
+# =========================
 
-# --- 3. BOT FONKSİYONLARI ---
+def get_latest_block():
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "eth_blockNumber",
+        "params": [],
+        "id": 1
+    }
+    res = requests.post(BASE_RPC, json=payload).json()
+    return int(res["result"], 16)
+
+def get_block(block):
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "eth_getBlockByNumber",
+        "params": [hex(block), True],
+        "id": 1
+    }
+    res = requests.post(BASE_RPC, json=payload).json()
+    return res.get("result", {}).get("transactions", [])
+
+# =========================
+# 🚨 BUY DETECTOR
+# =========================
+
+def check_chain():
+    global LAST_BLOCK
+
+    try:
+        latest = get_latest_block()
+
+        if LAST_BLOCK == 0:
+            LAST_BLOCK = latest - 2
+
+        for b in range(LAST_BLOCK + 1, latest + 1):
+            txs = get_block(b)
+
+            for tx in txs:
+                to = tx.get("to")
+
+                if to and CA_ADRESI.lower() in to.lower():
+
+                    value = int(tx["value"], 16) / 10**18
+
+                    msg = f"""
+🚀 IRVUS ON-CHAIN ACTIVITY
+
+💰 ETH Value: {value:.4f}
+👤 Wallet: {tx['from'][:6]}...{tx['from'][-4:]}
+
+🔗 https://basescan.org/tx/{tx['hash']}
+"""
+
+                    send_telegram(msg)
+
+        LAST_BLOCK = latest
+
+    except Exception as e:
+        print("Hata:", e)
+
+# =========================
+# 🔁 LOOP
+# =========================
+
+def loop():
+    while True:
+        check_chain()
+        time.sleep(12)
+
+# =========================
+# 🤖 TELEGRAM COMMAND
+# =========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    welcome_text = (
-        "💎 **Irvus Token Dünyasına Hoş Geldiniz!**\n\n"
-        "Ben **Irvus AI**, topluluğunuzun sanat ve finans asistanıyım.\n\n"
-        f"📄 **Kontrat Adresi (Base):**\n`{CA_ADRESI}`\n\n"
-        "🚀 **Komutlar:**\n"
-        "🔹 `/fiyat` - Anlık $IRVUS verilerini getirir.\n"
-        "🔹 `/ciz [kelime]` - Yapay zeka ile görsel oluşturur.\n\n"
-        "**Resmi Bağlantılarımız:**"
-    )
-    keyboard = [
-        [InlineKeyboardButton("🌐 Web Sitesi", url=WEB_SITESI), InlineKeyboardButton("🐦 X (Twitter)", url=X_ADRESI)],
-        [InlineKeyboardButton("📊 Canlı Grafik (Base)", url=f"https://dexscreener.com/base/{CA_ADRESI}")]
-    ]
-    try:
-        await update.message.reply_photo(photo=LOGO_URL, caption=welcome_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
-    except:
-        await update.message.reply_text(welcome_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    await update.message.reply_text("IRVUS BOT AKTİF 🚀")
 
-async def fiyat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global LAST_PRICE_DATA
-    simdi = time.time()
-    
-    if simdi - LAST_PRICE_DATA["time"] < 90 and LAST_PRICE_DATA["price"] != "0.00":
-        msg = (f"💎 **$IRVUS Güncel Durum**\n"
-               f"━━━━━━━━━━━━━━━━━━\n"
-               f"💰 Fiyat: `${LAST_PRICE_DATA['price']}`\n"
-               f"📈 24s Değişim: `%{LAST_PRICE_DATA['change']}`\n"
-               f"━━━━━━━━━━━━━━━━━━\n"
-               f"ℹ️ *Veri otomatik güncelleniyor.*")
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("📊 Grafiği Görüntüle", url=f"https://dexscreener.com/base/{CA_ADRESI}")]])
-        return await update.message.reply_text(msg, reply_markup=kb, parse_mode='Markdown')
+# =========================
+# 🚀 START
+# =========================
 
-    f_usd, degisim = None, "0"
-    try:
-        url = f"https://api.dexscreener.com/latest/dex/search?q={CA_ADRESI}"
-        res = requests.get(url, headers=HEADERS, timeout=12).json()
-        p = next((x for x in res.get('pairs', []) if x['chainId'] == 'base'), None)
-        if p:
-            f_usd = p.get('priceUsd')
-            degisim = p.get('priceChange', {}).get('h24', '0')
-            LAST_PRICE_DATA = {"price": f_usd, "change": degisim, "time": simdi}
-    except: pass
+def main():
+    Thread(target=run_web).start()
+    Thread(target=loop).start()
 
-    if f_usd:
-        msg = (f"💎 **$IRVUS Güncel Durum**\n"
-               f"━━━━━━━━━━━━━━━━━━\n"
-               f"💰 Fiyat: `${f_usd}`\n"
-               f"📈 24s Değişim: `%{deg
-                                   
+    app_bot = ApplicationBuilder().token(TOKEN).build()
+    app_bot.add_handler(CommandHandler("start", start))
+
+    app_bot.run_polling()
+
+if __name__ == "__main__":
+    main()
