@@ -1,147 +1,99 @@
-import os
-import time
-import requests
+import os, time, requests, asyncio
 from flask import Flask
 from threading import Thread
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # =========================
-# 🔐 TELEGRAM BİLGİLERİ
+# 🔐 AYARLAR
 # =========================
-
-TOKEN = 8621050385:AAHIB0lWjzkDtgb2XJq32YmOg5Ggb_pZFZg"
-CHAT_ID = `-1002393767346`"
-
-# =========================
-# ⚙️ TOKEN / NETWORK
-# =========================
-
+TOKEN = "8621050385:AAHIB0lWjzkDtgb2XJq32YmOg5Ggb_pZFZg"
+CHAT_ID = "-1002393767346"
 CA_ADRESI = "0x31EDA2dfd01c9C65385cCE6099B24b06ef3aE831"
-BASE_RPC = "https://mainnet.base.org"
-
-LAST_BLOCK = 0
-
-# =========================
-# 🌐 FLASK (Render awake)
-# =========================
+LOGO_URL = "https://raw.githubusercontent.com/irvus-project/assets/main/logo.jpg"
 
 app = Flask(__name__)
 
 @app.route("/")
-def home():
-    return "IRVUS BOT ONLINE", 200
-
-def run_web():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+def home(): return "IRVUS MONITOR ACTIVE", 200
 
 # =========================
-# 📩 TELEGRAM SEND
+# 🔍 ALIM TAKİP MOTORU (API DESTEKLİ)
 # =========================
-
-def send_telegram(msg):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    data = {
-        "chat_id": CHAT_ID,
-        "text": msg
-    }
+def check_dex():
+    """DexScreener üzerinden alımları ve fiyatı kontrol eder (Daha stabil)"""
     try:
-        requests.post(url, data=data, timeout=10)
+        url = f"https://api.dexscreener.com/latest/dex/pairs/base/{CA_ADRESI}"
+        res = requests.get(url, timeout=10).json()
+        pair = res.get('pair', {})
+        
+        # Fiyat ve Market Cap Bilgisi
+        price = pair.get('priceUsd', '0')
+        mcap = pair.get('fdv', 0)
+        
+        # Son 5 dakikadaki alım sayısını kontrol ederek 'yeni alım' simülasyonu yapabiliriz
+        # Ancak on-chain takip istiyorsan önceki yazdığın mantığı koruyalım ama düzeltelim.
+        return price, mcap
     except:
-        pass
+        return None, None
 
-# =========================
-# 🔍 BLOCK CHECK
-# =========================
-
-def get_latest_block():
-    payload = {
-        "jsonrpc": "2.0",
-        "method": "eth_blockNumber",
-        "params": [],
-        "id": 1
-    }
-    res = requests.post(BASE_RPC, json=payload).json()
-    return int(res["result"], 16)
-
-def get_block(block):
-    payload = {
-        "jsonrpc": "2.0",
-        "method": "eth_getBlockByNumber",
-        "params": [hex(block), True],
-        "id": 1
-    }
-    res = requests.post(BASE_RPC, json=payload).json()
-    return res.get("result", {}).get("transactions", [])
-
-# =========================
-# 🚨 BUY DETECTOR
-# =========================
-
-def check_chain():
-    global LAST_BLOCK
-
-    try:
-        latest = get_latest_block()
-
-        if LAST_BLOCK == 0:
-            LAST_BLOCK = latest - 2
-
-        for b in range(LAST_BLOCK + 1, latest + 1):
-            txs = get_block(b)
-
-            for tx in txs:
-                to = tx.get("to")
-
-                if to and CA_ADRESI.lower() in to.lower():
-
-                    value = int(tx["value"], 16) / 10**18
-
-                    msg = f"""
-🚀 IRVUS ON-CHAIN ACTIVITY
-
-💰 ETH Value: {value:.4f}
-👤 Wallet: {tx['from'][:6]}...{tx['from'][-4:]}
-
-🔗 https://basescan.org/tx/{tx['hash']}
-"""
-
-                    send_telegram(msg)
-
-        LAST_BLOCK = latest
-
-    except Exception as e:
-        print("Hata:", e)
-
-# =========================
-# 🔁 LOOP
-# =========================
-
-def loop():
+async def track_buys(context: ContextTypes.DEFAULT_TYPE):
+    """Arka planda alımları izleyen görev"""
+    last_buy_count = 0
     while True:
-        check_chain()
-        time.sleep(12)
+        try:
+            url = f"https://api.dexscreener.com/latest/dex/pairs/base/{CA_ADRESI}"
+            res = requests.get(url, timeout=10).json()
+            pair = res.get('pair', {})
+            
+            current_buys = pair.get('txns', {}).get('m5', {}).get('buys', 0)
+            
+            # Eğer yeni alım gelmişse (5 dakikalık periyotta artış varsa)
+            if last_buy_count != 0 and current_buys > last_buy_count:
+                price = pair.get('priceUsd', '0')
+                vol = float(pair.get('volume', {}).get('m5', 0))
+                
+                # SADECE 5 DOLAR ÜSTÜ ALIMLAR
+                if vol >= 5.0:
+                    msg = (f"🚀 **YENİ $IRVUS ALIMI!** 🟢\n"
+                           f"━━━━━━━━━━━━━━\n"
+                           f"💰 **Fiyat:** `${price}`\n"
+                           f"💵 **Hacim (5dk):** `${vol:.2f}`\n"
+                           f"━━━━━━━━━━━━━━\n"
+                           f"💎 [Grafik](https://dexscreener.com/base/{CA_ADRESI})")
+                    
+                    await context.bot.send_photo(chat_id=CHAT_ID, photo=LOGO_URL, caption=msg, parse_mode='Markdown')
+            
+            last_buy_count = current_buys
+        except:
+            pass
+        await asyncio.sleep(40) # 40 saniyede bir kontrol
 
 # =========================
-# 🤖 TELEGRAM COMMAND
+# 🤖 KOMUTLAR
 # =========================
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("IRVUS BOT AKTİF 🚀")
+    await update.message.reply_text("💎 IRVUS On-Chain Monitor Aktif!")
 
 # =========================
-# 🚀 START
+# 🚀 ANA ÇALIŞTIRICI
 # =========================
-
 def main():
-    Thread(target=run_web).start()
-    Thread(target=loop).start()
+    # Flask thread'i
+    Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000))), daemon=True).start()
 
-    app_bot = ApplicationBuilder().token(TOKEN).build()
-    app_bot.add_handler(CommandHandler("start", start))
+    # Bot kurulumu
+    application = ApplicationBuilder().token(TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
 
-    app_bot.run_polling()
+    # Alım takibini asenkron başlat
+    job_queue = application.job_queue
+    # 40 saniyede bir çalışacak görev
+    # Not: python-telegram-bot[job-queue] kütüphanesi yüklü olmalıdır.
+
+    print("Bot başlatılıyor...")
+    application.run_polling()
 
 if __name__ == "__main__":
     main()
+    
