@@ -1,99 +1,107 @@
-import os, time, requests, asyncio
+import os, requests, asyncio, time
 from flask import Flask
 from threading import Thread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# =========================
-# 🔐 AYARLAR
-# =========================
+# --- 1. RENDER İÇİN WEB SUNUCUSU ---
+app = Flask(__name__)
+@app.route('/')
+def home(): return "IRVUS SYSTEM ONLINE", 200
+
+# --- 2. AYARLAR (Bilgilerini Güncelledim) ---
 TOKEN = "8621050385:AAHIB0lWjzkDtgb2XJq32YmOg5Ggb_pZFZg"
-CHAT_ID = "-1002393767346"
 CA_ADRESI = "0x31EDA2dfd01c9C65385cCE6099B24b06ef3aE831"
+ANA_GRUP_ID = "-1002393767346"
 LOGO_URL = "https://raw.githubusercontent.com/irvus-project/assets/main/logo.jpg"
 
-app = Flask(__name__)
-
-@app.route("/")
-def home(): return "IRVUS MONITOR ACTIVE", 200
-
-# =========================
-# 🔍 ALIM TAKİP MOTORU (API DESTEKLİ)
-# =========================
-def check_dex():
-    """DexScreener üzerinden alımları ve fiyatı kontrol eder (Daha stabil)"""
+# --- 3. YARDIMCI VERİ ÇEKİCİ ---
+def get_safe(url):
     try:
-        url = f"https://api.dexscreener.com/latest/dex/pairs/base/{CA_ADRESI}"
-        res = requests.get(url, timeout=10).json()
-        pair = res.get('pair', {})
-        
-        # Fiyat ve Market Cap Bilgisi
-        price = pair.get('priceUsd', '0')
-        mcap = pair.get('fdv', 0)
-        
-        # Son 5 dakikadaki alım sayısını kontrol ederek 'yeni alım' simülasyonu yapabiliriz
-        # Ancak on-chain takip istiyorsan önceki yazdığın mantığı koruyalım ama düzeltelim.
-        return price, mcap
-    except:
-        return None, None
+        r = requests.get(url, timeout=12)
+        return r.json() if r.status_code == 200 else None
+    except: return None
 
+# --- 4. KOMUTLAR ---
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Butonlu Karşılama Ekranı"""
+    msg = (f"💎 **Irvus AI Dünyasına Hoş Geldiniz!**\n\n"
+           f"Bilgi sistemi ve alım takibi aktiftir.\n\n"
+           f"📄 **CA:** `{CA_ADRESI}`")
+    kb = [
+        [InlineKeyboardButton("🌐 Web Sitesi", url="https://www.irvustoken.xyz"), 
+         InlineKeyboardButton("🐦 X (Twitter)", url="https://x.com/IRVUSTOKEN")],
+        [InlineKeyboardButton("📊 Canlı Grafik", url=f"https://dexscreener.com/base/{CA_ADRESI}")]
+    ]
+    await update.message.reply_photo(photo=LOGO_URL, caption=msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+
+async def fiyat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Güncel Fiyat Verisi"""
+    data = get_safe(f"https://api.dexscreener.com/latest/dex/search?q={CA_ADRESI}")
+    if data and 'pairs' in data:
+        p = next((x for x in data['pairs'] if x['chainId'] == 'base'), None)
+        if p:
+            mcap = float(p.get('fdv', 0)) / 1000
+            msg = (f"💰 **Irvus Fiyat:** `${p['priceUsd']}`\n"
+                   f"📈 **24s Değişim:** %{p['priceChange']['h24']}\n"
+                   f"📊 **Market Cap:** `${mcap:.1f}K`\n"
+                   f"💧 **Likidite:** `${p.get('liquidity', {}).get('usd', 0):,.0f}`")
+            return await update.message.reply_text(msg)
+    await update.message.reply_text("💎 Veriler çekiliyor, lütfen tekrar deneyin.")
+
+async def ciz(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """AI Çizim Komutu"""
+    prompt = " ".join(context.args)
+    if not prompt: return await update.message.reply_text("❌ Kullanım: `/ciz aslan` ")
+    await update.message.reply_text("🎨 Resminiz hazırlanıyor...")
+    u = f"https://image.pollinations.ai/prompt/{prompt.replace(' ', '%20')}?seed={int(time.time())}"
+    await update.message.reply_photo(photo=u, caption=f"🖼 **Irvus Sanat:** `{prompt}`")
+
+# --- 5. ALIM TAKİBİ (EN AZ 5$) ---
 async def track_buys(context: ContextTypes.DEFAULT_TYPE):
-    """Arka planda alımları izleyen görev"""
-    last_buy_count = 0
+    last_buys = 0
     while True:
-        try:
-            url = f"https://api.dexscreener.com/latest/dex/pairs/base/{CA_ADRESI}"
-            res = requests.get(url, timeout=10).json()
-            pair = res.get('pair', {})
-            
-            current_buys = pair.get('txns', {}).get('m5', {}).get('buys', 0)
-            
-            # Eğer yeni alım gelmişse (5 dakikalık periyotta artış varsa)
-            if last_buy_count != 0 and current_buys > last_buy_count:
-                price = pair.get('priceUsd', '0')
+        data = get_safe(f"https://api.dexscreener.com/latest/dex/pairs/base/{CA_ADRESI}")
+        if data and 'pair' in data:
+            pair = data['pair']
+            cur_buys = pair.get('txns', {}).get('m5', {}).get('buys', 0)
+            if last_buys != 0 and cur_buys > last_buys:
                 vol = float(pair.get('volume', {}).get('m5', 0))
-                
-                # SADECE 5 DOLAR ÜSTÜ ALIMLAR
-                if vol >= 5.0:
-                    msg = (f"🚀 **YENİ $IRVUS ALIMI!** 🟢\n"
-                           f"━━━━━━━━━━━━━━\n"
-                           f"💰 **Fiyat:** `${price}`\n"
-                           f"💵 **Hacim (5dk):** `${vol:.2f}`\n"
+                if vol >= 5.0: # 5$ FİLTRESİ
+                    msg = (f"🚀 **YENİ ALIM!** 🟢\n━━━━━━━━━━━━━━\n"
+                           f"💰 **Fiyat:** `${pair.get('priceUsd')}`\n"
+                           f"💵 **Hacim:** `${vol:.2f}`\n"
                            f"━━━━━━━━━━━━━━\n"
                            f"💎 [Grafik](https://dexscreener.com/base/{CA_ADRESI})")
-                    
-                    await context.bot.send_photo(chat_id=CHAT_ID, photo=LOGO_URL, caption=msg, parse_mode='Markdown')
-            
-            last_buy_count = current_buys
-        except:
-            pass
-        await asyncio.sleep(40) # 40 saniyede bir kontrol
+                    try: await context.bot.send_photo(chat_id=ANA_GRUP_ID, photo=LOGO_URL, caption=msg)
+                    except: pass
+            last_buys = cur_buys
+        await asyncio.sleep(30)
 
-# =========================
-# 🤖 KOMUTLAR
-# =========================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("💎 IRVUS On-Chain Monitor Aktif!")
-
-# =========================
-# 🚀 ANA ÇALIŞTIRICI
-# =========================
-def main():
-    # Flask thread'i
-    Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000))), daemon=True).start()
-
-    # Bot kurulumu
-    application = ApplicationBuilder().token(TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-
-    # Alım takibini asenkron başlat
-    job_queue = application.job_queue
-    # 40 saniyede bir çalışacak görev
-    # Not: python-telegram-bot[job-queue] kütüphanesi yüklü olmalıdır.
-
-    print("Bot başlatılıyor...")
-    application.run_polling()
-
-if __name__ == "__main__":
-    main()
+# --- 6. ANA MOTOR ---
+async def main():
+    # Flask sunucusu (Render'ın kapanmaması için)
+    Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000))), daemon=True).start()
     
+    # Bot Kurulumu
+    application = ApplicationBuilder().token(TOKEN).build()
+    
+    # Komutları Tanımla
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler(["fiyat", "p"], fiyat))
+    application.add_handler(CommandHandler(["ciz", "draw"], ciz))
+    
+    async with application:
+        await application.initialize()
+        await application.start()
+        # Arka planda alım takibi görevini başlat
+        asyncio.create_task(track_buys(application))
+        # Botu dinlemeye başla
+        await application.updater.start_polling(drop_pending_updates=True)
+        while True: await asyncio.sleep(3600)
+
+if __name__ == '__main__':
+    try: asyncio.run(main())
+    except: pass
+        
