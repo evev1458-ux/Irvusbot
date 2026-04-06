@@ -4,30 +4,57 @@ from threading import Thread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# --- 1. WEB SUNUCUSU ---
+# --- 1. RENDER İÇİN WEB SUNUCUSU ---
 app = Flask(__name__)
 @app.route('/')
-def home(): return "IRVUS FIX ONLINE", 200
+def home(): return "IRVUS FULL SYSTEM ONLINE", 200
 
-# --- 2. AYARLAR ---
-TOKEN = "8621050385:AAGC37E6oeacOL1fjtUWqFoN2sXCVlIplOc"
+# --- 2. AYARLAR (Yeni Token'ını Buraya Yaz) ---
+TOKEN = "BURAYA_YENI_ALDIĞIN_TOKENI_YAZ" 
 CA_ADRESI = "0x31EDA2dfd01c9C65385cCE6099B24b06ef3aE831"
 HF_TOKEN = "Hf_VzFKUkIElGkRTDWwEwLPwPPOOmwWwwBqNq"
 GRUP_LISTESI = ["-1002393767346", "-1002375203585"]
 LOGO_URL = "https://raw.githubusercontent.com/irvus-project/assets/main/logo.jpg"
 CHAT_MODEL = "https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta"
 
-# --- 3. GÜVENLİ VERİ ÇEKME FONKSİYONU ---
-def get_json_safe(url):
+# --- 3. GÜVENLİ VERİ ÇEKME ---
+def get_safe(url):
     try:
-        r = requests.get(url, timeout=10)
-        if r.status_code == 200:
-            return r.json()
-    except:
-        pass
-    return None
+        r = requests.get(url, timeout=12)
+        return r.json() if r.status_code == 200 else None
+    except: return None
 
-# --- 4. SOHBET VE AI ---
+# --- 4. KOMUTLAR (Start ve Fiyat Geri Geldi) ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = (f"💎 **Irvus AI Dünyasına Hoş Geldin!**\n\n"
+           f"Ben Irvus topluluğunun zeki asistanıyım. Alımları takip eder, sorularını yanıtlar ve hayallerini çizerim.\n\n"
+           f"📄 **CA:** `{CA_ADRESI}`")
+    
+    kb = [[InlineKeyboardButton("📊 Canlı Grafik", url=f"https://dexscreener.com/base/{CA_ADRESI}")],
+          [InlineKeyboardButton("🌐 Web Sitesi", url="https://www.irvustoken.xyz"), InlineKeyboardButton("🐦 X (Twitter)", url="https://x.com/IRVUSTOKEN")]]
+    
+    await update.message.reply_photo(photo=LOGO_URL, caption=msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+
+async def fiyat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    data = get_safe(f"https://api.dexscreener.com/latest/dex/search?q={CA_ADRESI}")
+    if data and 'pairs' in data:
+        p = next((x for x in data['pairs'] if x['chainId'] == 'base'), None)
+        if p:
+            mcap = float(p.get('fdv', 0)) / 1000
+            msg = (f"💰 **Fiyat:** `${p['priceUsd']}`\n"
+                   f"📈 **24s Değişim:** %{p['priceChange']['h24']}\n"
+                   f"📊 **Market Cap:** `${mcap:.1f}K`\n"
+                   f"💧 **Likidite:** `${p.get('liquidity', {}).get('usd', 0):,.0f}`")
+            return await update.message.reply_text(msg)
+    await update.message.reply_text("💎 Irvus verileri şu an güncelleniyor, grafikten kontrol edebilirsin!")
+
+async def ciz(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    p = " ".join(context.args)
+    if not p: return await update.message.reply_text("❌ Kullanım: `/ciz aslan` ")
+    u = f"https://image.pollinations.ai/prompt/{p.replace(' ', '%20')}?seed={int(time.time())}"
+    await update.message.reply_photo(photo=u, caption=f"🖼 **Irvus AI:** `{p}`")
+
+# --- 5. AKILLI SOHBET ---
 async def chat_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
     text = update.message.text.lower()
@@ -36,57 +63,36 @@ async def chat_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "irvus" in text or is_reply:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
         
-        # Bitcoin için hızlı Binance kontrolü
+        # Bitcoin hızlı yanıt
         if any(x in text for x in ["bitcoin", "btc"]):
-            data = get_json_safe("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT")
-            if data:
-                return await update.message.reply_text(f"📊 **BTC:** `${float(data['price']):,.0f}`. Irvus ile takipteyiz! 🚀")
+            d = get_safe("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT")
+            if d: return await update.message.reply_text(f"📊 **BTC:** `${float(d['price']):,.0f}`. Irvus ile yükselişe hazırız! 🚀")
 
-        # AI Yanıtı
         try:
-            prompt = f"Sen Irvus Token asistanısın. Türkçe ve kısa cevap ver: {update.message.text}"
-            res = requests.post(CHAT_MODEL, headers={"Authorization": f"Bearer {HF_TOKEN}"}, 
-                                json={"inputs": prompt, "parameters": {"max_new_tokens": 80}}, timeout=10).json()
-            ans = res[0].get('generated_text', "").replace(prompt, "").strip()
+            prompt = f"<|system|>\nSen Irvus Token asistanısın. Türkçe, zeki ve kısa cevap ver.</s>\n<|user|>\n{update.message.text}</s>\n<|assistant|>\n"
+            res = requests.post(CHAT_MODEL, headers={"Authorization": f"Bearer {HF_TOKEN}"}, json={"inputs": prompt}, timeout=10).json()
+            ans = res[0].get('generated_text', "").split("<|assistant|>")[-1].strip()
             if ans: return await update.message.reply_text(f"🤖 {ans}")
         except: pass
-        await update.message.reply_text("💎 Irvus burada! Seni duyuyorum dostum.")
+        await update.message.reply_text("💎 Irvus vizyonuyla seni dinliyorum dostum!")
 
-# --- 5. ALIM TAKİBİ (30 SN) ---
+# --- 6. ALIM TAKİBİ ---
 async def track_buys(context: ContextTypes.DEFAULT_TYPE):
     last_buys = 0
     while True:
-        data = get_json_safe(f"https://api.dexscreener.com/latest/dex/pairs/base/{CA_ADRESI}")
+        data = get_safe(f"https://api.dexscreener.com/latest/dex/pairs/base/{CA_ADRESI}")
         if data and 'pair' in data:
             pair = data['pair']
-            current_buys = pair.get('txns', {}).get('m5', {}).get('buys', 0)
-            if last_buys != 0 and current_buys > last_buys:
+            cur = pair.get('txns', {}).get('m5', {}).get('buys', 0)
+            if last_buys != 0 and cur > last_buys:
                 vol = float(pair.get('volume', {}).get('m5', 0))
                 if vol >= 5.0:
-                    msg = f"🚀 **YENİ ALIM!** 🟢\n💰 **Fiyat:** `${pair.get('priceUsd')}`\n💵 **Hacim:** `${vol:.2f}`"
+                    msg = f"🚀 **YENİ ALIM!** 🟢\n━━━━━━━━━━━━━━\n💰 **Fiyat:** `${pair.get('priceUsd')}`\n💵 **Hacim:** `${vol:.2f}`\n━━━━━━━━━━━━━━\n💎 [Grafik](https://dexscreener.com/base/{CA_ADRESI})"
                     for gid in GRUP_LISTESI:
                         try: await context.bot.send_photo(chat_id=gid, photo=LOGO_URL, caption=msg)
                         except: pass
-            last_buys = current_buys
+            last_buys = cur
         await asyncio.sleep(30)
-
-# --- 6. KOMUTLAR ---
-async def start(update, context):
-    kb = [[InlineKeyboardButton("📊 Grafik", url=f"https://dexscreener.com/base/{CA_ADRESI}")]]
-    await update.message.reply_photo(photo=LOGO_URL, caption="💎 **Irvus AI Aktif!**", reply_markup=InlineKeyboardMarkup(kb))
-
-async def fiyat(update, context):
-    data = get_json_safe(f"https://api.dexscreener.com/latest/dex/search?q={CA_ADRESI}")
-    if data and 'pairs' in data:
-        p = next((x for x in data['pairs'] if x['chainId'] == 'base'), None)
-        if p: return await update.message.reply_text(f"💰 **Fiyat:** `${p['priceUsd']}`\n📈 **24s:** %{p['priceChange']['h24']}")
-    await update.message.reply_text("💎 Irvus her geçen gün güçleniyor! Detaylar için grafiğe bakabilirsin.")
-
-async def ciz(update, context):
-    p = " ".join(context.args)
-    if not p: return await update.message.reply_text("❌ Örn: `/ciz aslan` ")
-    u = f"https://image.pollinations.ai/prompt/{p.replace(' ', '%20')}?seed={int(time.time())}"
-    await update.message.reply_photo(photo=u, caption=f"🖼 **Irvus AI:** `{p}`")
 
 # --- 7. ANA MOTOR ---
 async def main():
