@@ -14,8 +14,8 @@ TOKEN = "8621050385:AAESXIZLT6HbS3CGeT-sT-HJcgvFuJF8ff0"
 CA_ADRESI = "0x31EDA2dfd01c9C65385cCE6099B24b06ef3aE831"
 HF_TOKEN = "Hf_VzFKUkIElGkRTDWwEwLPwPPOOmwWwwBqNq"
 
-# Modeller
-CHAT_MODEL = "https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta"
+# HIZLI VE ZEKİ MODEL (Gemma)
+CHAT_MODEL = "https://api-inference.huggingface.co/models/google/gemma-1.1-7b-it"
 IMAGE_MODEL = "https://api-inference.huggingface.co/models/runwayml/stable-diffusion-v1-5"
 
 X_ADRESI = "https://x.com/IRVUSTOKEN"
@@ -25,30 +25,28 @@ LOGO_URL = "https://raw.githubusercontent.com/irvus-project/assets/main/logo.jpg
 HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"}
 LAST_PRICE_DATA = {"price": "0.00", "change": "0", "time": 0}
 
-# --- 3. SOHBET ZEKASI ---
+# --- 3. SOHBET FONKSİYONU ---
 
 async def chat_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
     user_text = update.message.text
     
-    # İsmi geçerse veya bota yanıt verilirse
     is_reply = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
     if "irvus" in user_text.lower() or is_reply:
         try:
-            # Daha zeki bir yapı
-            prompt = f"<|system|>\nSen Irvus Token asistanısın. Samimi ve kısa cevaplar ver.</s>\n<|user|>\n{user_text}</s>\n<|assistant|>\n"
+            # Gemma için özel prompt (Türkçe cevap vermesini sağlıyoruz)
+            prompt = f"Sen Irvus Token projesinin zeki yapay zekasısın. Türkçe, kısa ve samimi cevap ver: {user_text}"
             res = requests.post(CHAT_MODEL, headers=HEADERS, json={"inputs": prompt}, timeout=15).json()
             
-            # Yanıtı temizle
-            full_ans = res[0].get('generated_text', "")
-            bot_response = full_ans.split("<|assistant|>")[-1].strip()
+            # Yanıtı al
+            bot_response = res[0].get('generated_text', "").replace(prompt, "").strip()
             
-            if not bot_response: bot_response = "Irvus her zaman yanınızda! 💎"
+            if not bot_response: bot_response = "Irvus her zaman burada! Gelecek bizimle başlıyor. 💎"
             await update.message.reply_text(f"🤖 **Irvus AI:** {bot_response}")
         except:
             await update.message.reply_text("💎 Irvus ile gelecek bugün başlıyor! Ne sormuştun?")
 
-# --- 4. KOMUTLAR (Butonlar Geri Geldi) ---
+# --- 4. KOMUTLAR ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (f"💎 **Irvus AI Dünyasına Hoş Geldiniz!**\n\n"
@@ -83,13 +81,13 @@ async def fiyat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def ciz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = " ".join(context.args)
-    if not prompt: return await update.message.reply_text("❌ Örn: `/ciz aslan` ")
-    await update.message.reply_text("🎨 Çiziyorum...")
+    if not prompt: return await update.message.reply_text("❌ Örn: `/ciz uzayda bir aslan` ")
+    await update.message.reply_text("🎨 Hayal ediyorum...")
     try:
         response = requests.post(IMAGE_MODEL, headers=HEADERS, json={"inputs": prompt}, timeout=30)
         await update.message.reply_photo(photo=response.content, caption=f"🖼 **Irvus AI:** {prompt}")
     except:
-        await update.message.reply_text("❌ Hata!")
+        await update.message.reply_text("❌ Çizim motoru meşgul.")
 
 # --- 5. ANA MOTOR ---
 async def main():
@@ -104,11 +102,10 @@ async def main():
     async with application:
         await application.initialize()
         await application.start()
-        print(">>> IRVUS AI AKTIF")
+        print(">>> IRVUS AI SISTEMI BASLADI")
         await application.updater.start_polling(drop_pending_updates=True)
         while True: await asyncio.sleep(3600)
 
 if __name__ == '__main__':
     try: asyncio.run(main())
     except: pass
-        
