@@ -10,14 +10,17 @@ app = Flask(__name__)
 def home(): return "IRVUS AI ONLINE", 200
 
 # --- 2. AYARLAR ---
-# BURAYA BOTFATHER'DAN ALDIĞIN YENİ TOKEN'I YAPIŞTIR
-TOKEN = "BURAYA_YENI_TOKENI_YAPISTIR" 
+TOKEN = "8621050385:AAESXIZLT6HbS3CGeT-sT-HJcgvFuJF8ff0" 
 CA_ADRESI = "0x31EDA2dfd01c9C65385cCE6099B24b06ef3aE831"
 HF_TOKEN = "Hf_VzFKUkIElGkRTDWwEwLPwPPOOmwWwwBqNq"
 
-# Gelişmiş Sohbet Modeli
-CHAT_MODEL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
+# Modeller
+CHAT_MODEL = "https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta"
 IMAGE_MODEL = "https://api-inference.huggingface.co/models/runwayml/stable-diffusion-v1-5"
+
+X_ADRESI = "https://x.com/IRVUSTOKEN"
+WEB_SITESI = "https://www.irvustoken.xyz"
+LOGO_URL = "https://raw.githubusercontent.com/irvus-project/assets/main/logo.jpg" 
 
 HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"}
 LAST_PRICE_DATA = {"price": "0.00", "change": "0", "time": 0}
@@ -28,26 +31,43 @@ async def chat_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
     user_text = update.message.text
     
-    # İsmi geçerse veya yanıt verilirse
+    # İsmi geçerse veya bota yanıt verilirse
     is_reply = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
     if "irvus" in user_text.lower() or is_reply:
         try:
-            # Botun kimliğini Mistral'e öğretiyoruz
-            prompt = f"<s>[INST] Sen Irvus Token projesinin yapay zekasısın. Kısa, zeki ve samimi bir cevap ver: {user_text} [/INST]"
+            # Daha zeki bir yapı
+            prompt = f"<|system|>\nSen Irvus Token asistanısın. Samimi ve kısa cevaplar ver.</s>\n<|user|>\n{user_text}</s>\n<|assistant|>\n"
             res = requests.post(CHAT_MODEL, headers=HEADERS, json={"inputs": prompt}, timeout=15).json()
             
-            response = res[0].get('generated_text', "").split("[/INST]")[-1].strip()
-            if not response: response = "Irvus ile geleceği inşa ediyoruz! 💎"
+            # Yanıtı temizle
+            full_ans = res[0].get('generated_text', "")
+            bot_response = full_ans.split("<|assistant|>")[-1].strip()
             
-            await update.message.reply_text(f"🤖 **Irvus AI:** {response}")
+            if not bot_response: bot_response = "Irvus her zaman yanınızda! 💎"
+            await update.message.reply_text(f"🤖 **Irvus AI:** {bot_response}")
         except:
-            await update.message.reply_text("💎 Irvus burada! Her zaman yanındayız.")
+            await update.message.reply_text("💎 Irvus ile gelecek bugün başlıyor! Ne sormuştun?")
 
-# --- 4. KOMUTLAR ---
+# --- 4. KOMUTLAR (Butonlar Geri Geldi) ---
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = (f"💎 **Irvus AI Dünyasına Hoş Geldiniz!**\n\n"
+           f"Ben Irvus AI. Bana her şeyi sorabilir, fiyat öğrenebilir veya hayallerini çizdirebilirsin.\n\n"
+           f"📄 **CA:** `{CA_ADRESI}`\n\n"
+           f"🚀 **Komutlar:**\n"
+           f"🔹 `/fiyat` - Anlık veriler.\n"
+           f"🔹 `/ciz [kelime]` - Görsel oluşturma.")
+    
+    kb = [[InlineKeyboardButton("🌐 Web Sitesi", url=WEB_SITESI), InlineKeyboardButton("🐦 X (Twitter)", url=X_ADRESI)],
+          [InlineKeyboardButton("📊 Canlı Grafik (Base)", url=f"https://dexscreener.com/base/{CA_ADRESI}")]]
+    
+    try:
+        await update.message.reply_photo(photo=LOGO_URL, caption=msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+    except:
+        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
 async def fiyat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global LAST_PRICE_DATA
-    # 90 saniye hafıza (Cache)
     if time.time() - LAST_PRICE_DATA["time"] < 90 and LAST_PRICE_DATA["price"] != "0.00":
         return await update.message.reply_text(f"💰 **Fiyat:** `${LAST_PRICE_DATA['price']}`\n📈 **24s:** `%{LAST_PRICE_DATA['change']}`")
 
@@ -59,23 +79,24 @@ async def fiyat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             LAST_PRICE_DATA = {"price": p['priceUsd'], "change": p['priceChange']['h24'], "time": time.time()}
             await update.message.reply_text(f"💰 **Fiyat:** `${p['priceUsd']}`\n📈 **24s:** `%{p['priceChange']['h24']}`")
     except:
-        await update.message.reply_text("⚠️ API yoğun, birazdan tekrar dene.")
+        await update.message.reply_text("⚠️ API yoğun.")
 
 async def ciz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = " ".join(context.args)
-    if not prompt: return await update.message.reply_text("❌ Örn: `/ciz uzayda bir aslan` ")
-    await update.message.reply_text("🎨 Hayal ediyorum...")
+    if not prompt: return await update.message.reply_text("❌ Örn: `/ciz aslan` ")
+    await update.message.reply_text("🎨 Çiziyorum...")
     try:
         response = requests.post(IMAGE_MODEL, headers=HEADERS, json={"inputs": prompt}, timeout=30)
         await update.message.reply_photo(photo=response.content, caption=f"🖼 **Irvus AI:** {prompt}")
     except:
-        await update.message.reply_text("❌ Çizim motoru meşgul.")
+        await update.message.reply_text("❌ Hata!")
 
-# --- 5. ANA ÇALIŞTIRICI ---
+# --- 5. ANA MOTOR ---
 async def main():
     Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000))), daemon=True).start()
     application = ApplicationBuilder().token(TOKEN).build()
     
+    application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler(["fiyat", "p"], fiyat))
     application.add_handler(CommandHandler(["ciz", "draw"], ciz))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat_ai))
@@ -83,7 +104,7 @@ async def main():
     async with application:
         await application.initialize()
         await application.start()
-        print(">>> IRVUS AI SISTEMI BASLADI")
+        print(">>> IRVUS AI AKTIF")
         await application.updater.start_polling(drop_pending_updates=True)
         while True: await asyncio.sleep(3600)
 
