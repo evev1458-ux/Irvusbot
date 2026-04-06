@@ -4,33 +4,34 @@ from threading import Thread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# --- 1. WEB SUNUCUSU ---
+# --- 1. WEB SUNUCUSU (Render Uyumluluğu) ---
 app = Flask(__name__)
 @app.route('/')
-def home(): return "IRVUS SYSTEM ONLINE", 200
+def home(): return "IRVUS SYSTEM ACTIVE", 200
 
 # --- 2. AYARLAR ---
-TOKEN = "8621050385:AAGC37E6oeacOL1fjtUWqFoN2sXCVlIplOc"
+# Yeni aldığın token'ı buraya ekledim
+TOKEN = "8621050385:AAHAySA0SXbAP4G0KwcnCKGLkYs2yf-OeQU" 
 CA_ADRESI = "0x31EDA2dfd01c9C65385cCE6099B24b06ef3aE831"
 LOGO_URL = "https://raw.githubusercontent.com/irvus-project/assets/main/logo.jpg"
 ANA_GRUP_ID = "-1002419409893"
 
-# --- 3. YARDIMCI FONKSİYON ---
+# --- 3. YARDIMCI VERİ ÇEKİCİ ---
 def get_safe(url):
     try:
         r = requests.get(url, timeout=12)
-        return r.json() if r.status_code == 200 else None
-    except: return None
+        if r.status_code == 200: return r.json()
+    except: pass
+    return None
 
 # --- 4. KOMUTLAR ---
 
-# TAM İSTEDİĞİN BUTONLU START KOMUTU
+# Görseldeki gibi butonlu ve logolu Start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (f"💎 **Irvus AI Dünyasına Hoş Geldiniz!**\n\n"
-           f"Her iki grupta da alım takibi ve zeka desteği aktiftir.\n\n"
+           f"Bilgi sistemi ve alım takibi 7/24 aktiftir.\n\n"
            f"📄 **CA:** `{CA_ADRESI}`")
     
-    # Görseldeki buton yapısının aynısı
     kb = [
         [InlineKeyboardButton("🌐 Web Sitesi", url="https://www.irvustoken.xyz"), 
          InlineKeyboardButton("🐦 X (Twitter)", url="https://x.com/IRVUSTOKEN")],
@@ -44,6 +45,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
+# Detaylı Fiyat Komutu
 async def fiyat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = get_safe(f"https://api.dexscreener.com/latest/dex/search?q={CA_ADRESI}")
     if data and 'pairs' in data:
@@ -57,6 +59,7 @@ async def fiyat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await update.message.reply_text(msg)
     await update.message.reply_text("💎 Veriler güncelleniyor, lütfen tekrar deneyin.")
 
+# Görsel Çizim Komutu
 async def ciz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = " ".join(context.args)
     if not prompt: return await update.message.reply_text("❌ Kullanım: `/ciz aslan` ")
@@ -73,24 +76,31 @@ async def track_buys(context: ContextTypes.DEFAULT_TYPE):
         if data and 'pair' in data:
             pair = data['pair']
             cur = pair.get('txns', {}).get('m5', {}).get('buys', 0)
+            
+            # Yeni bir alım gerçekleştiyse
             if last_buys != 0 and cur > last_buys:
                 vol = float(pair.get('volume', {}).get('m5', 0))
+                # SADECE 5 DOLAR VE ÜSTÜ
                 if vol >= 5.0:
                     msg = (f"🚀 **YENİ ALIM!** 🟢\n━━━━━━━━━━━━━━\n"
                            f"💰 **Fiyat:** `${pair.get('priceUsd')}`\n"
-                           f"💵 **Hacim:** `${vol:.2f}`\n━━━━━━━━━━━━━━")
+                           f"💵 **Hacim:** `${vol:.2f}`\n"
+                           f"━━━━━━━━━━━━━━\n"
+                           f"💎 [Grafik](https://dexscreener.com/base/{CA_ADRESI})")
                     try: await context.bot.send_photo(chat_id=ANA_GRUP_ID, photo=LOGO_URL, caption=msg)
                     except: pass
             last_buys = cur
-        await asyncio.sleep(30)
+        await asyncio.sleep(30) # 30 saniyede bir kontrol eder
 
 # --- 6. ANA ÇALIŞTIRICI ---
 async def main():
+    # Flask sunucusunu ayrı bir koldan başlat
     Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000))), daemon=True).start()
     
+    # Botu inşa et
     bot = ApplicationBuilder().token(TOKEN).build()
     
-    # Handlerları buraya ekliyoruz
+    # Komutları kaydet
     bot.add_handler(CommandHandler("start", start))
     bot.add_handler(CommandHandler(["fiyat", "p"], fiyat))
     bot.add_handler(CommandHandler(["ciz", "draw"], ciz))
@@ -98,11 +108,13 @@ async def main():
     async with bot:
         await bot.initialize()
         await bot.start()
+        # Arka planda alım takibini başlat
         asyncio.create_task(track_buys(bot))
+        # Botu dinlemeye başla ve eski birikmiş istekleri temizle
         await bot.updater.start_polling(drop_pending_updates=True)
         while True: await asyncio.sleep(3600)
 
 if __name__ == '__main__':
     try: asyncio.run(main())
     except: pass
-        
+                    
