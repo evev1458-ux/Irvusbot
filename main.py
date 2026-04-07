@@ -5,10 +5,14 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from urllib.parse import quote
 
-# --- 1. WEB ---
+# --- 1. WEB SUNUCUSU (Bağımsız Kol) ---
 app = Flask(__name__)
 @app.route('/')
-def home(): return "IRVUS USD MONITOR ACTIVE", 200
+def home(): return "IRVUS POWER SYSTEM: OK", 200
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 # --- 2. AYARLAR ---
 TOKEN = "8621050385:AAHEpgqJYNNGXyon1I855vghWfkQ8p-4tlk"
@@ -18,44 +22,47 @@ LOGO = "https://raw.githubusercontent.com/irvus-project/assets/main/logo.jpg"
 BASE_RPC = "https://mainnet.base.org"
 SWAP_TOPIC = "0xc42079f94a1d5046247098a76b0b302c30b6531398e0a8118d34346e27b13280"
 
-# --- 3. YARDIMCI FİYAT FONKSİYONU ---
-async def get_instant_price(session):
+# --- 3. YARDIMCI FONKSİYONLAR ---
+async def get_price():
+    headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         url = f"https://api.dexscreener.com/latest/dex/pairs/base/{CA}"
-        async with session.get(url, timeout=5) as r:
-            data = await r.json()
-            return float(data['pair']['priceUsd'])
+        r = requests.get(url, headers=headers, timeout=5).json()
+        return float(r['pair']['priceUsd'])
     except:
-        return 0.0
+        try:
+            url_g = f"https://api.geckoterminal.com/api/v2/networks/base/tokens/{CA}"
+            r_g = requests.get(url_g, headers=headers, timeout=5).json()
+            return float(r_g['data']['attributes']['price_usd'])
+        except: return 0.0
 
 # --- 4. KOMUTLAR ---
-async def start(update, context):
-    msg = f"💎 **IRVUS V4 USD SISTEMI**\n\nDolar bazlı alımlar takip ediliyor.\n📄 CA: `{CA}`"
-    kb = [[InlineKeyboardButton("🐦 Twitter", url="https://x.com/IRVUSTOKEN")]]
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = f"💎 **IRVUS TOKEN DÜNYASI**\n\n📄 **CA:** `{CA}`"
+    kb = [[InlineKeyboardButton("🐦 Twitter (X)", url="https://x.com/IRVUSTOKEN")]]
     await update.message.reply_photo(photo=LOGO, caption=msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
-async def fiyat(update, context):
-    async with aiohttp.ClientSession() as session:
-        p = await get_instant_price(session)
+async def fiyat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    p = await get_price()
     if p > 0: await update.message.reply_text(f"💰 **Fiyat:** `${p}`")
-    else: await update.message.reply_text("⚠️ Fiyat şu an çekilemiyor.")
+    else: await update.message.reply_text("⚠️ Ağ yoğun, az sonra tekrar deneyin.")
 
-async def ciz(update, context):
+async def ciz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     p = " ".join(context.args)
-    if not p: return await update.message.reply_text("❌ Örnek: /ciz aslan")
+    if not p: return await update.message.reply_text("❌ Örnek: /ciz kedi")
     await update.message.reply_text("🎨 Çiziliyor...")
     url = f"https://image.pollinations.ai/prompt/{quote(p)}?seed={int(time.time())}"
     await update.message.reply_photo(photo=url, caption=f"🖼 `{p}`")
 
-# --- 5. DOLAR BAZLI ALIM TAKİBİ ---
+# --- 5. ALIM TAKİBİ ---
 async def monitor(bot_app):
     last_block = 0
-    async with aiohttp.ClientSession() as session:
-        while True:
-            try:
-                # Blok çek
+    while True:
+        try:
+            async with aiohttp.ClientSession() as session:
                 async with session.post(BASE_RPC, json={"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}) as r:
-                    curr = int((await r.json())["result"], 16)
+                    res = await r.json()
+                    curr = int(res["result"], 16)
                 
                 if last_block == 0: last_block = curr - 1
                 if curr > last_block:
@@ -64,45 +71,35 @@ async def monitor(bot_app):
                         logs = (await r.json()).get("result", [])
                     
                     for log in logs:
-                        try:
-                            # Adet hesapla
-                            amt = int(log["data"][2:][-64:], 16) / 10**18
-                            if amt > 10:
-                                # Dolar değerini hesapla
-                                price = await get_instant_price(session)
-                                usd_value = amt * price
-                                
-                                # Sadece 5 dolar üstü alımları göster (Grubu kirletmemek için)
-                                if usd_value >= 5.0:
-                                    tx = log["transactionHash"]
-                                    msg = (
-                                        f"🚀 **YENİ ALIM!** 🟢\n"
-                                        f"━━━━━━━━━━━━━━\n"
-                                        f"💰 **Harcama:** `${usd_value:.2f}`\n"
-                                        f"💎 **Miktar:** `{amt:,.0f} IRVUS`\n"
-                                        f"━━━━━━━━━━━━━━\n"
-                                        f"🔗 [Basescan](https://basescan.org/tx/{tx})"
-                                    )
-                                    await bot_app.bot.send_photo(chat_id=GROUP_ID, photo=LOGO, caption=msg, parse_mode='Markdown')
-                        except: pass
+                        amt = int(log["data"][2:][-64:], 16) / 10**18
+                        if amt > 50:
+                            p = await get_price()
+                            usd = amt * p
+                            if usd >= 5:
+                                tx = log["transactionHash"]
+                                msg = f"🚀 **YENİ ALIM!** 🟢\n💰 `${usd:.2f}`\n💎 `{amt:,.0f} IRVUS`\n🔗 [Basescan](https://basescan.org/tx/{tx})"
+                                await bot_app.bot.send_photo(chat_id=GROUP_ID, photo=LOGO, caption=msg, parse_mode='Markdown')
                     last_block = curr
-            except: pass
-            await asyncio.sleep(8)
+        except: pass
+        await asyncio.sleep(10)
 
-# --- 6. ÇALIŞTIR ---
-def run_web():
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
-
-async def main():
-    Thread(target=run_web, daemon=True).start()
-    bot = ApplicationBuilder().token(TOKEN).build()
-    bot.add_handler(CommandHandler(["start", "star"], start))
-    bot.add_handler(CommandHandler("fiyat", fiyat))
-    bot.add_handler(CommandHandler("ciz", ciz))
-    
-    asyncio.create_task(monitor(bot))
-    await bot.run_polling(drop_pending_updates=True)
-
+# --- 6. ANA ÇALIŞTIRICI ---
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Flask'ı tamamen bağımsız başlat
+    t = Thread(target=run_web)
+    t.daemon = True
+    t.start()
+
+    # Botu başlat
+    application = ApplicationBuilder().token(TOKEN).build()
+    application.add_handler(CommandHandler(["start", "star"], start))
+    application.add_handler(CommandHandler("fiyat", fiyat))
+    application.add_handler(CommandHandler("ciz", ciz))
+
+    # Alım takibi görevini döngüye ekle
+    loop = asyncio.get_event_loop()
+    loop.create_task(monitor(application))
+
+    print(">>> IRVUS SISTEMI AKTIF")
+    application.run_polling(drop_pending_updates=True)
     
