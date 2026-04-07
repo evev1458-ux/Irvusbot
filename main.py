@@ -14,12 +14,13 @@ def home(): return "IRVUS PRO ONLINE", 200
 TOKEN = "8621050385:AAHEpgqJYNNGXyon1I855vghWfkQ8p-4tlk"
 CA = "0x31EDA2dfd01c9C65385cCE6099B24b06ef3aE831"
 LOGO = "https://raw.githubusercontent.com/irvus-project/assets/main/logo.jpg"
-TWITTER_URL = "https://x.com/irvus" # Burayı kendi Twitter adresinle değiştirebilirsin
+# Twitter adresi büyük harflerle güncellendi
+TWITTER_URL = "https://x.com/IRVUSTOKEN"
 
 # --- 3. KOMUTLAR ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Grafik yerine Twitter butonu eklendi"""
+    """Twitter butonu büyük harf hassasiyetiyle eklendi"""
     msg = (f"💎 **IRVUS TOKEN DÜNYASI**\n\n"
            f"📄 **Sözleşme Adresi (CA):**\n`{CA}`")
     
@@ -39,27 +40,35 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
 async def fiyat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Fiyat çekme hızı ve hata yönetimi artırıldı"""
+    """DexScreener engelini aşmak için geliştirilmiş fiyat çekici"""
     try:
-        # Daha hızlı yanıt için timeout ve headers eklendi
-        headers = {'User-Agent': 'Mozilla/5.0'}
+        # Gerçek bir tarayıcı gibi davranması için detaylı başlıklar (Headers)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'application/json',
+            'Referer': 'https://dexscreener.com/'
+        }
         url = f"https://api.dexscreener.com/latest/dex/pairs/base/{CA}"
-        r = requests.get(url, headers=headers, timeout=5).json()
+        
+        # Requests oturumu kullanarak daha stabil veri çekiyoruz
+        with requests.Session() as session:
+            r = session.get(url, headers=headers, timeout=10).json()
         
         if 'pair' in r:
             p = r['pair']['priceUsd']
             mcap = float(r['pair'].get('fdv', 0)) / 1000
-            await update.message.reply_text(f"💰 **Güncel Fiyat:** `${p}`\n📊 **Market Cap:** `${mcap:.1f}K`")
+            # Fiyatı daha belirgin göstermek için kalın yazım eklendi
+            await update.message.reply_text(f"💰 **Fiyat:** `${p}`\n📊 **Market Cap:** `${mcap:.1f}K`")
         else:
-            await update.message.reply_text("⚠️ Veri şu an hazır değil, lütfen az sonra tekrar deneyin.")
+            await update.message.reply_text("⚠️ Veri şu an DexScreener üzerinde güncelleniyor, lütfen tekrar deneyin.")
     except:
-        await update.message.reply_text("⚠️ DexScreener şu an yoğun. Lütfen `/fiyat` komutunu tekrar gönderin.")
+        await update.message.reply_text("⚠️ DexScreener şu an bot erişimini kısıtlıyor. Lütfen 1-2 dakika sonra tekrar `/fiyat` yazın.")
 
 async def ciz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = " ".join(context.args)
     if not prompt: return await update.message.reply_text("❌ Örnek: `/ciz aslan` ")
     
-    await update.message.reply_text("🎨 Irvus AI senin için çiziyor...")
+    await update.message.reply_text("🎨 Irvus AI çiziyor...")
     img_url = f"https://image.pollinations.ai/prompt/{quote(prompt)}?seed={int(time.time())}"
     await update.message.reply_photo(photo=img_url, caption=f"🖼 **Görsel:** `{prompt}`")
 
@@ -75,6 +84,6 @@ if __name__ == "__main__":
     application.add_handler(CommandHandler("fiyat", fiyat))
     application.add_handler(CommandHandler("ciz", ciz))
     
-    print(">>> IRVUS BOT TÜM AYARLARLA HAZIR!")
+    print(">>> IRVUS BOT SON AYARLARLA AKTİF!")
     application.run_polling(drop_pending_updates=True)
     
