@@ -13,23 +13,22 @@ def home(): return "IRVUS PRO ONLINE", 200
 # --- 2. AYARLAR ---
 TOKEN = "8621050385:AAHEpgqJYNNGXyon1I855vghWfkQ8p-4tlk"
 CA = "0x31EDA2dfd01c9C65385cCE6099B24b06ef3aE831"
-# Logo linkini doğrudan GitHub raw üzerinden güncelledim
 LOGO = "https://raw.githubusercontent.com/irvus-project/assets/main/logo.jpg"
+TWITTER_URL = "https://x.com/irvus" # Burayı kendi Twitter adresinle değiştirebilirsin
 
 # --- 3. KOMUTLAR ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Butonları ve logoyu her koşulda gönderir"""
+    """Grafik yerine Twitter butonu eklendi"""
     msg = (f"💎 **IRVUS TOKEN DÜNYASI**\n\n"
            f"📄 **Sözleşme Adresi (CA):**\n`{CA}`")
     
     kb = [[
         InlineKeyboardButton("🌐 Web Sitesi", url="https://www.irvustoken.xyz"),
-        InlineKeyboardButton("📊 Grafik", url=f"https://dexscreener.com/base/{CA}")
+        InlineKeyboardButton("🐦 Twitter (X)", url=TWITTER_URL)
     ]]
     
     try:
-        # Fotoğraf gönderilemezse sadece metin gönderir (Hata koruması)
         await update.message.reply_photo(
             photo=LOGO,
             caption=msg,
@@ -40,24 +39,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
 async def fiyat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Fiyat çekme işlemini daha dayanıklı hale getirdik"""
+    """Fiyat çekme hızı ve hata yönetimi artırıldı"""
     try:
-        # User-Agent ekleyerek DexScreener bloklamasını aşmaya çalışıyoruz
+        # Daha hızlı yanıt için timeout ve headers eklendi
         headers = {'User-Agent': 'Mozilla/5.0'}
         url = f"https://api.dexscreener.com/latest/dex/pairs/base/{CA}"
-        r = requests.get(url, headers=headers, timeout=10).json()
+        r = requests.get(url, headers=headers, timeout=5).json()
         
         if 'pair' in r:
             p = r['pair']['priceUsd']
             mcap = float(r['pair'].get('fdv', 0)) / 1000
             await update.message.reply_text(f"💰 **Güncel Fiyat:** `${p}`\n📊 **Market Cap:** `${mcap:.1f}K`")
         else:
-            await update.message.reply_text("⚠️ Fiyat verisi şu an hazır değil, lütfen 1 dk sonra deneyin.")
-    except Exception as e:
-        await update.message.reply_text("⚠️ DexScreener şu an yoğun, grafikten bakabilirsiniz.")
+            await update.message.reply_text("⚠️ Veri şu an hazır değil, lütfen az sonra tekrar deneyin.")
+    except:
+        await update.message.reply_text("⚠️ DexScreener şu an yoğun. Lütfen `/fiyat` komutunu tekrar gönderin.")
 
 async def ciz(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Çizim zaten çalışıyor, dokunmadık"""
     prompt = " ".join(context.args)
     if not prompt: return await update.message.reply_text("❌ Örnek: `/ciz aslan` ")
     
@@ -77,6 +75,6 @@ if __name__ == "__main__":
     application.add_handler(CommandHandler("fiyat", fiyat))
     application.add_handler(CommandHandler("ciz", ciz))
     
-    print(">>> IRVUS BOT HAZIR!")
+    print(">>> IRVUS BOT TÜM AYARLARLA HAZIR!")
     application.run_polling(drop_pending_updates=True)
     
