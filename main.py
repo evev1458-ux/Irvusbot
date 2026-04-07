@@ -1,138 +1,178 @@
-import os, requests, asyncio, time
+import os, asyncio, time
 from flask import Flask
 from threading import Thread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+import aiohttp
+from urllib.parse import quote
 
-# --- 1. WEB SUNUCUSU (Render Uyumluluğu) ---
+# --- WEB ---
 app = Flask(__name__)
 @app.route('/')
-def home(): return "IRVUS MASTER SYSTEM ONLINE", 200
+def home():
+    return "IRVUS ONLINE", 200
 
-# --- 2. AYARLAR ---
-# Yeni aldığın güncel tokenı buraya işledim
-TOKEN = "8621050385:AAEPRKANXBaUJUIm6gsHqLcKVYyskUOZ8JU" 
-CA_ADRESI = "0x31EDA2dfd01c9C65385cCE6099B24b06ef3aE831"
-ANA_GRUP_ID = "-1002393767346"
-LOGO_URL = "https://raw.githubusercontent.com/irvus-project/assets/main/logo.jpg"
+# --- AYAR ---
+TOKEN = os.getenv("8621050385:AAEPRKANXBaUJUIm6gsHqLcKVYyskUOZ8JU")
+CA = "0x31EDA2dfd01c9C65385cCE6099B24b06ef3aE831"
+GROUP_ID = "-1002393767346"
+LOGO = "https://raw.githubusercontent.com/irvus-project/assets/main/logo.jpg"
 
-# AĞ AYARLARI (Base Mainnet)
+WEB_URL = "https://www.irvustoken.xyz"
+X_URL = "https://x.com/irvus"
+
 BASE_RPC = "https://mainnet.base.org"
 SWAP_TOPIC = "0xc42079f94a1d5046247098a76b0b302c30b6531398e0a8118d34346e27b13280"
 
-# --- 3. YARDIMCI FİYAT ÇEKİCİ (Hesaplama İçin) ---
-def get_current_price():
+# --- FİYAT ---
+async def get_price(session):
     try:
-        r = requests.get(f"https://api.dexscreener.com/latest/dex/pairs/base/{CA_ADRESI}", timeout=5).json()
-        return float(r['pair']['priceUsd'])
-    except: return 0.0
+        url = f"https://api.dexscreener.com/latest/dex/pairs/base/{CA}"
+        async with session.get(url) as r:
+            data = await r.json()
+            return float(data['pair']['priceUsd'])
+    except:
+        return 0
 
-# --- 4. KOMUTLAR (Start, Fiyat, Ciz) ---
+# --- /star ---
+async def star(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = f"💎 IRVUS TOKEN\n\n📄 CA:\n`{CA}`"
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Butonlu Karşılama Ekranı"""
-    msg = (f"💎 **Irvus On-Chain Sistemine Hoş Geldiniz!**\n\n"
-           f"Alımlar doğrudan **Base Ağında** saniyesinde izleniyor.\n\n"
-           f"📄 **CA:** `{CA_ADRESI}`")
-    kb = [[InlineKeyboardButton("🌐 Web Sitesi", url="https://www.irvustoken.xyz"), 
-           InlineKeyboardButton("📊 Grafik", url=f"https://dexscreener.com/base/{CA_ADRESI}")]]
-    await update.message.reply_photo(photo=LOGO_URL, caption=msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+    kb = [[
+        InlineKeyboardButton("🌐 Web Site", url=WEB_URL),
+        InlineKeyboardButton("🐦 X", url=X_URL)
+    ]]
 
+    await update.message.reply_photo(
+        photo=LOGO,
+        caption=msg,
+        reply_markup=InlineKeyboardMarkup(kb),
+        parse_mode='Markdown'
+    )
+
+# --- /fiyat ---
 async def fiyat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Anlık Fiyat Bilgisi"""
-    price = get_current_price()
+    async with aiohttp.ClientSession() as session:
+        price = await get_price(session)
+
     if price > 0:
-        await update.message.reply_text(f"💰 **Güncel $IRVUS Fiyatı:** `${price}`")
+        await update.message.reply_text(f"💰 Fiyat: ${price}")
     else:
-        await update.message.reply_text("⚠️ Fiyat verisi şu an çekilemiyor.")
+        await update.message.reply_text("⚠️ Fiyat alınamadı")
 
+# --- /ciz ---
 async def ciz(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """AI Çizim Komutu"""
     prompt = " ".join(context.args)
-    if not prompt: return await update.message.reply_text("❌ Örn: `/ciz aslan` ")
-    await update.message.reply_text("🎨 Resminiz hazırlanıyor...")
-    u = f"https://image.pollinations.ai/prompt/{prompt.replace(' ', '%20')}?seed={int(time.time())}"
-    await update.message.reply_photo(photo=u, caption=f"🖼 **Irvus AI:** `{prompt}`")
 
-# --- 5. ANA MOTOR: BASE AĞI ALIM TAKİBİ ---
-async def monitor_base_chain(application):
+    if not prompt:
+        return await update.message.reply_text("❌ Örnek: /ciz kedi")
+
+    await update.message.reply_text("🎨 çiziliyor...")
+
+    url = f"https://image.pollinations.ai/prompt/{quote(prompt)}?seed={int(time.time())}"
+
+    await update.message.reply_photo(photo=url, caption=prompt)
+
+# --- BASE TAKİP ---
+async def monitor(app_bot):
     last_block = 0
-    print(">>> Base Ağı Canlı Takibi Başlatıldı...")
-    
-    while True:
-        try:
-            # Blok numarasını al
-            res = requests.post(BASE_RPC, json={"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}, timeout=10).json()
-            current_block = int(res["result"], 16)
-            
-            if last_block == 0: last_block = current_block - 1
-            
-            # Yeni blokları tara
-            if current_block > last_block:
-                payload = {
-                    "jsonrpc": "2.0", "method": "eth_getLogs",
-                    "params": [{
-                        "fromBlock": hex(last_block + 1), "toBlock": hex(current_block),
-                        "address": CA_ADRESI, "topics": [SWAP_TOPIC]
-                    }], "id": 1
-                }
-                logs = requests.post(BASE_RPC, json=payload, timeout=10).json().get("result", [])
-                
-                for log in logs:
-                    data_hex = log["data"][2:]
-                    amount_raw = int(data_hex[-64:], 16) / 10**18
-                    
-                    if amount_raw > 0:
-                        price = get_current_price()
-                        usd_val = amount_raw * price
-                        
-                        # 5 DOLAR FİLTRESİ
-                        if usd_val >= 5.0:
-                            tx_hash = log["transactionHash"]
-                            buy_msg = (
-                                f"🚀 **YENİ $IRVUS ALIMI!** 🟢\n"
-                                f"━━━━━━━━━━━━━━\n"
-                                f"💰 **Harcama:** `${usd_val:.2f}`\n"
-                                f"💎 **Miktar:** `{amount_raw:,.0f} IRVUS`\n"
-                                f"━━━━━━━━━━━━━━\n"
-                                f"🔗 [Basescan](https://basescan.org/tx/{tx_hash})"
-                            )
-                            try:
-                                await application.bot.send_photo(chat_id=ANA_GRUP_ID, photo=LOGO_URL, caption=buy_msg, parse_mode='Markdown')
-                            except: pass
-                
-                last_block = current_block
-        except: pass
-        await asyncio.sleep(5) # 5 saniyede bir blok kontrolü
 
-# --- 6. ÇALIŞTIRICI ---
-def run_flask():
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
+    async with aiohttp.ClientSession() as session:
+        print(">>> TAKİP BAŞLADI")
+
+        while True:
+            try:
+                # blok
+                payload = {"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}
+                async with session.post(BASE_RPC, json=payload) as r:
+                    data = await r.json()
+
+                current = int(data["result"], 16)
+
+                if last_block == 0:
+                    last_block = current - 1
+
+                if current > last_block:
+                    logs_payload = {
+                        "jsonrpc":"2.0",
+                        "method":"eth_getLogs",
+                        "params":[{
+                            "fromBlock": hex(last_block+1),
+                            "toBlock": hex(current),
+                            "address": CA,
+                            "topics":[SWAP_TOPIC]
+                        }],
+                        "id":1
+                    }
+
+                    async with session.post(BASE_RPC, json=logs_payload) as r:
+                        logs = (await r.json()).get("result", [])
+
+                    for log in logs:
+                        try:
+                            data_hex = log["data"][2:]
+                            amount = int(data_hex[-64:], 16) / 10**18
+
+                            if amount <= 0:
+                                continue
+
+                            price = await get_price(session)
+                            usd = amount * price
+
+                            if usd < 20:
+                                continue
+
+                            # emoji sistem
+                            if usd >= 1000:
+                                emoji = "🐳"
+                            elif usd >= 100:
+                                emoji = "🔥"
+                            else:
+                                emoji = "🟢"
+
+                            tx = log["transactionHash"]
+
+                            msg = (
+                                f"{emoji} YENİ ALIM\n\n"
+                                f"💰 ${usd:.2f}\n"
+                                f"💎 {amount:,.0f} IRVUS\n\n"
+                                f"https://basescan.org/tx/{tx}"
+                            )
+
+                            await app_bot.bot.send_photo(
+                                chat_id=GROUP_ID,
+                                photo=LOGO,
+                                caption=msg
+                            )
+
+                        except:
+                            pass
+
+                    last_block = current
+
+            except:
+                pass
+
+            await asyncio.sleep(4)
+
+# --- RUN ---
+def run_web():
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 
 async def main():
-    # Flask sunucusunu ayrı thread'de başlat
-    Thread(target=run_flask, daemon=True).start()
-    
-    # Botu inşa et (Yeni Token ile)
-    application = ApplicationBuilder().token(TOKEN).build()
-    
-    # Komutları kaydet
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler(["fiyat", "p"], fiyat))
-    application.add_handler(CommandHandler(["ciz", "draw"], ciz))
-    
-    await application.initialize()
-    await application.start()
-    
-    # Ağ takip motorunu arka planda başlat
-    asyncio.create_task(monitor_base_chain(application))
-    
-    # Dinlemeye başla
-    print(">>> Irvus Bot Yeni Token ile Yayında!")
-    await application.updater.start_polling(drop_pending_updates=True)
-    while True: await asyncio.sleep(3600)
+    Thread(target=run_web, daemon=True).start()
 
-if __name__ == '__main__':
-    try: asyncio.run(main())
-    except: pass
-    
+    bot = ApplicationBuilder().token(TOKEN).build()
+
+    bot.add_handler(CommandHandler("star", star))
+    bot.add_handler(CommandHandler("fiyat", fiyat))
+    bot.add_handler(CommandHandler("ciz", ciz))
+
+    asyncio.create_task(monitor(bot))
+
+    print(">>> BOT ÇALIŞIYOR")
+    await bot.run_polling()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
