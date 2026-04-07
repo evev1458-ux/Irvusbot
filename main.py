@@ -1,99 +1,82 @@
-import os, asyncio, time, aiohttp
+import os, asyncio, time, requests
 from flask import Flask
 from threading import Thread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from urllib.parse import quote
 
-# --- 1. WEB SUNUCUSU (Render'ı Uyanık Tutar) ---
+# --- 1. WEB ---
 app = Flask(__name__)
 @app.route('/')
-def home():
-    return "IRVUS POWER SYSTEM ONLINE", 200
+def home(): return "IRVUS PRO ONLINE", 200
 
 # --- 2. AYARLAR ---
-# Yeni verdiğin token buraya eklendi
 TOKEN = "8621050385:AAHEpgqJYNNGXyon1I855vghWfkQ8p-4tlk"
 CA = "0x31EDA2dfd01c9C65385cCE6099B24b06ef3aE831"
+# Logo linkini doğrudan GitHub raw üzerinden güncelledim
 LOGO = "https://raw.githubusercontent.com/irvus-project/assets/main/logo.jpg"
 
-WEB_URL = "https://www.irvustoken.xyz"
-X_URL = "https://x.com/irvus"
-
-# --- 3. YARDIMCI FİYAT ÇEKİCİ ---
-async def get_price():
-    try:
-        url = f"https://api.dexscreener.com/latest/dex/pairs/base/{CA}"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=5) as r:
-                data = await r.json()
-                return float(data['pair']['priceUsd'])
-    except:
-        return 0.0
-
-# --- 4. KOMUTLAR ---
+# --- 3. KOMUTLAR ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/start veya /star komutu için butonlu karşılama"""
+    """Butonları ve logoyu her koşulda gönderir"""
     msg = (f"💎 **IRVUS TOKEN DÜNYASI**\n\n"
            f"📄 **Sözleşme Adresi (CA):**\n`{CA}`")
     
     kb = [[
-        InlineKeyboardButton("🌐 Web Sitesi", url=WEB_URL),
-        InlineKeyboardButton("🐦 X (Twitter)", url=X_URL)
+        InlineKeyboardButton("🌐 Web Sitesi", url="https://www.irvustoken.xyz"),
+        InlineKeyboardButton("📊 Grafik", url=f"https://dexscreener.com/base/{CA}")
     ]]
     
-    await update.message.reply_photo(
-        photo=LOGO,
-        caption=msg,
-        reply_markup=InlineKeyboardMarkup(kb),
-        parse_mode='Markdown'
-    )
+    try:
+        # Fotoğraf gönderilemezse sadece metin gönderir (Hata koruması)
+        await update.message.reply_photo(
+            photo=LOGO,
+            caption=msg,
+            reply_markup=InlineKeyboardMarkup(kb),
+            parse_mode='Markdown'
+        )
+    except:
+        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
 async def fiyat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/fiyat komutu"""
-    price = await get_price()
-    if price > 0:
-        await update.message.reply_text(f"💰 **Güncel $IRVUS Fiyatı:** `${price}`")
-    else:
-        await update.message.reply_text("⚠️ Fiyat şu an çekilemiyor, lütfen tekrar deneyin.")
+    """Fiyat çekme işlemini daha dayanıklı hale getirdik"""
+    try:
+        # User-Agent ekleyerek DexScreener bloklamasını aşmaya çalışıyoruz
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        url = f"https://api.dexscreener.com/latest/dex/pairs/base/{CA}"
+        r = requests.get(url, headers=headers, timeout=10).json()
+        
+        if 'pair' in r:
+            p = r['pair']['priceUsd']
+            mcap = float(r['pair'].get('fdv', 0)) / 1000
+            await update.message.reply_text(f"💰 **Güncel Fiyat:** `${p}`\n📊 **Market Cap:** `${mcap:.1f}K`")
+        else:
+            await update.message.reply_text("⚠️ Fiyat verisi şu an hazır değil, lütfen 1 dk sonra deneyin.")
+    except Exception as e:
+        await update.message.reply_text("⚠️ DexScreener şu an yoğun, grafikten bakabilirsiniz.")
 
 async def ciz(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/ciz komutu"""
+    """Çizim zaten çalışıyor, dokunmadık"""
     prompt = " ".join(context.args)
-    if not prompt:
-        return await update.message.reply_text("❌ Kullanım: `/ciz uzayda bir canavar` ")
+    if not prompt: return await update.message.reply_text("❌ Örnek: `/ciz aslan` ")
     
     await update.message.reply_text("🎨 Irvus AI senin için çiziyor...")
-    
-    # Pollinations AI görsel linki
-    image_url = f"https://image.pollinations.ai/prompt/{quote(prompt)}?seed={int(time.time())}"
-    
-    await update.message.reply_photo(
-        photo=image_url, 
-        caption=f"🖼 **Görsel:** `{prompt}`"
-    )
+    img_url = f"https://image.pollinations.ai/prompt/{quote(prompt)}?seed={int(time.time())}"
+    await update.message.reply_photo(photo=img_url, caption=f"🖼 **Görsel:** `{prompt}`")
 
-# --- 5. ÇALIŞTIRICI ---
+# --- 4. ÇALIŞTIRICI ---
 def run_web():
-    # Render PORT ayarı
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 
 if __name__ == "__main__":
-    # Flask sunucusunu ayrı bir kolda başlatıyoruz
     Thread(target=run_web, daemon=True).start()
-
-    # Botu yeni token ile ayağa kaldırıyoruz
-    bot = ApplicationBuilder().token(TOKEN).build()
-
-    # Komutları kaydediyoruz
-    bot.add_handler(CommandHandler(["start", "star"], start))
-    bot.add_handler(CommandHandler("fiyat", fiyat))
-    bot.add_handler(CommandHandler("ciz", ciz))
-
-    print(">>> IRVUS BOT YENİ TOKEN İLE AKTİF")
     
-    # Botu çalıştırırken bekleyen eski mesajları siliyoruz (Çakışma önleyici)
-    bot.run_polling(drop_pending_updates=True)
+    application = ApplicationBuilder().token(TOKEN).build()
+    application.add_handler(CommandHandler(["start", "star"], start))
+    application.add_handler(CommandHandler("fiyat", fiyat))
+    application.add_handler(CommandHandler("ciz", ciz))
+    
+    print(">>> IRVUS BOT HAZIR!")
+    application.run_polling(drop_pending_updates=True)
     
