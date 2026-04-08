@@ -1,90 +1,107 @@
-import os, time, requests
+import os, asyncio, time, requests, aiohttp
 from flask import Flask
 from threading import Thread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from urllib.parse import quote
 
-# --- 1. WEB SUNUCUSU ---
+# --- 1. WEB SUNUCUSU (Render'ı Uyanık Tutmak İçin) ---
 app = Flask(__name__)
 @app.route('/')
-def home(): return "IRVUS FIX ONLINE", 200
+def home(): return "IRVUS BOT: ACTIVE", 200
 
 def run_web():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
 # --- 2. AYARLAR ---
-TOKEN = "8621050385:AAHEpgqJYNNGXyon1I855vghWfkQ8p-4tlk"
+TOKEN = "8621050385:AAFP8Pmc0p24oQnDEiL6SwMTgL6tr3HIPss"
 CA = "0x31EDA2dfd01c9C65385cCE6099B24b06ef3aE831"
 LOGO = "https://raw.githubusercontent.com/irvus-project/assets/main/logo.jpg"
+TWITTER_URL = "https://x.com/IRVUSTOKEN"
+WEB_URL = "https://www.irvustoken.xyz"
 
-# --- 3. KOMUTLAR ---
-
-def start(update, context):
-    msg = f"💎 **IRVUS GLOBAL AI**\n\nBana her şeyi sorabilirsin!\n📄 **CA:** `{CA}`"
-    kb = [
-        [InlineKeyboardButton("🌐 Web Sitesi", url="https://www.irvustoken.xyz")],
-        [InlineKeyboardButton("🐦 Twitter (X)", url="https://x.com/IRVUSTOKEN")]
-    ]
+# --- 3. AKILLI AI VE FİYAT FONKSİYONLARI ---
+async def ask_ai(question):
     try:
-        update.message.reply_photo(photo=LOGO, caption=msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+        # Hata vermeyen en stabil global model
+        ai_url = f"https://text.pollinations.ai/{quote(question)}?model=openai"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(ai_url, timeout=15) as resp:
+                return await resp.text()
     except:
-        update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+        return "Şu an global ağda bir yoğunluk var, lütfen az sonra tekrar sor."
 
-def fiyat(update, context):
+async def get_price():
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         url = f"https://api.dexscreener.com/latest/dex/pairs/base/{CA}"
-        r = requests.get(url, headers=headers, timeout=10).json()
-        if 'pair' in r:
-            p = r['pair']['priceUsd']
-            update.message.reply_text(f"💰 **Güncel Fiyat:** `${p}`")
-        else:
-            update.message.reply_text("⚠️ Fiyat şu an hazır değil, grafikten bakabilirsiniz.")
+        r = requests.get(url, headers=headers, timeout=5).json()
+        return r['pair']['priceUsd'] if 'pair' in r else None
     except:
-        update.message.reply_text("⚠️ DexScreener şu an yoğun, lütfen az sonra tekrar deneyin.")
+        return None
 
-def sor(update, context):
-    query = " ".join(context.args)
-    if not query:
-        return update.message.reply_text("🤖 Lütfen bir soru yaz! Örnek: `/sor naber?` ")
+# --- 4. KOMUTLAR ---
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Butonları ve logoyu garantili şekilde gönderir"""
+    msg = (f"💎 **IRVUS GLOBAL AI SİSTEMİ**\n\n"
+           f"🤖 **Bana istediğin her şeyi sorabilirsin!**\n"
+           f"Kullanım: `/sor Fenerbahçe şampiyon olur mu?` \n\n"
+           f"📄 **CA:** `{CA}`")
     
-    # Hata vermemesi için bekleme mesajı
-    sent_msg = update.message.reply_text("🤔 Irvus AI düşünüyor...")
-    
+    kb = [
+        [InlineKeyboardButton("🌐 Web Sitesi", url=WEB_URL)],
+        [InlineKeyboardButton("🐦 Twitter (X)", url=TWITTER_URL)]
+    ]
+    reply_markup = InlineKeyboardMarkup(kb)
+
     try:
-        # Daha stabil ve hızlı çalışan AI motoru
-        ai_url = f"https://text.pollinations.ai/{quote(query)}?model=openai&cache={int(time.time())}"
-        r = requests.get(ai_url, timeout=20)
-        
-        if r.status_code == 200:
-            update.message.reply_text(f"🤖 **Irvus AI:**\n\n{r.text}")
-        else:
-            update.message.reply_text("⚠️ Yapay zeka sistemi şu an çok yoğun, lütfen 1 dakika sonra tekrar sorun.")
+        await update.message.reply_photo(photo=LOGO, caption=msg, reply_markup=reply_markup, parse_mode='Markdown')
     except:
-        update.message.reply_text("⚠️ Bağlantı hatası oluştu, lütfen tekrar deneyin.")
+        await update.message.reply_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
 
-def ciz(update, context):
+async def sor(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = " ".join(context.args)
+    if not query: return await update.message.reply_text("🤖 Bir şey sor! Örnek: `/sor naber?` ")
+    
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    answer = await ask_ai(query)
+    await update.message.reply_text(f"🤖 **Irvus AI:**\n\n{answer}")
+
+async def fiyat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    p = await get_price()
+    if p: await update.message.reply_text(f"💰 **Güncel Fiyat:** `${p}`")
+    else: await update.message.reply_text("⚠️ DexScreener yoğun, lütfen az sonra tekrar deneyin.")
+
+async def ciz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     p = " ".join(context.args)
-    if not p: return update.message.reply_text("❌ Örnek: `/ciz kedi` ")
-    update.message.reply_text("🎨 Çiziliyor...")
+    if not p: return await update.message.reply_text("❌ Örnek: `/ciz kedi` ")
+    await update.message.reply_text("🎨 Irvus AI senin için çiziyor...")
     img = f"https://image.pollinations.ai/prompt/{quote(p)}?seed={int(time.time())}"
-    update.message.reply_photo(photo=img, caption=f"🖼 `{p}`")
+    await update.message.reply_photo(photo=img, caption=f"🖼 **Görsel:** `{p}`")
 
-# --- 4. ANA ÇALIŞTIRICI ---
-if __name__ == "__main__":
+# --- 5. ANA ÇALIŞTIRICI ---
+async def main():
     Thread(target=run_web, daemon=True).start()
     
-    # Çakışmayı önlemek için drop_pending_updates=True çok önemli
+    # drop_pending_updates=True eski çatışmaları temizlemek için kritiktir
     application = ApplicationBuilder().token(TOKEN).build()
-    
     application.add_handler(CommandHandler(["start", "star"], start))
     application.add_handler(CommandHandler("sor", sor))
     application.add_handler(CommandHandler("fiyat", fiyat))
     application.add_handler(CommandHandler("ciz", ciz))
-    
-    print(">>> BOT TERTEMİZ BAŞLADI!")
-    # drop_pending_updates=True sayesinde o kırmızı Conflict hatasından kurtuluyoruz
-    application.run_polling(drop_pending_updates=True)
-    
+
+    async with application:
+        await application.initialize()
+        await application.start()
+        print(">>> SİSTEM YENİ TOKEN İLE BAŞLADI!")
+        await application.updater.start_polling(drop_pending_updates=True)
+        while True: await asyncio.sleep(3600)
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except:
+        pass
+        
