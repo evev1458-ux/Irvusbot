@@ -34,7 +34,6 @@ def start(update, context):
 
 def fiyat(update, context):
     try:
-        # User-agent ekleyerek bağlantı hatasını (403/500) aşıyoruz
         headers = {'User-Agent': 'Mozilla/5.0'}
         url = f"https://api.dexscreener.com/latest/dex/pairs/base/{CA}"
         r = requests.get(url, headers=headers, timeout=10).json()
@@ -42,23 +41,29 @@ def fiyat(update, context):
             p = r['pair']['priceUsd']
             update.message.reply_text(f"💰 **Güncel Fiyat:** `${p}`")
         else:
-            update.message.reply_text("⚠️ Fiyat şu an DexScreener'da hazır değil.")
+            update.message.reply_text("⚠️ Fiyat şu an hazır değil, grafikten bakabilirsiniz.")
     except:
-        update.message.reply_text("⚠️ DexScreener bağlantı hatası verdi. Az sonra tekrar deneyin.")
+        update.message.reply_text("⚠️ DexScreener şu an yoğun, lütfen az sonra tekrar deneyin.")
 
 def sor(update, context):
     query = " ".join(context.args)
     if not query:
         return update.message.reply_text("🤖 Lütfen bir soru yaz! Örnek: `/sor naber?` ")
     
-    update.message.reply_text("🤔 Düşünüyorum...")
+    # Hata vermemesi için bekleme mesajı
+    sent_msg = update.message.reply_text("🤔 Irvus AI düşünüyor...")
+    
     try:
-        # Hata veren 'search' parametresini tamamen sildik, en sade model:
-        ai_url = f"https://text.pollinations.ai/{quote(query)}?model=openai"
+        # Daha stabil ve hızlı çalışan AI motoru
+        ai_url = f"https://text.pollinations.ai/{quote(query)}?model=openai&cache={int(time.time())}"
         r = requests.get(ai_url, timeout=20)
-        update.message.reply_text(f"🤖 **Irvus AI:**\n\n{r.text}")
+        
+        if r.status_code == 200:
+            update.message.reply_text(f"🤖 **Irvus AI:**\n\n{r.text}")
+        else:
+            update.message.reply_text("⚠️ Yapay zeka sistemi şu an çok yoğun, lütfen 1 dakika sonra tekrar sorun.")
     except:
-        update.message.reply_text("⚠️ Yapay zeka şu an cevap veremiyor.")
+        update.message.reply_text("⚠️ Bağlantı hatası oluştu, lütfen tekrar deneyin.")
 
 def ciz(update, context):
     p = " ".join(context.args)
@@ -71,7 +76,7 @@ def ciz(update, context):
 if __name__ == "__main__":
     Thread(target=run_web, daemon=True).start()
     
-    # En stabil senkron (synchronous) yapıyı kuruyoruz
+    # Çakışmayı önlemek için drop_pending_updates=True çok önemli
     application = ApplicationBuilder().token(TOKEN).build()
     
     application.add_handler(CommandHandler(["start", "star"], start))
@@ -79,6 +84,7 @@ if __name__ == "__main__":
     application.add_handler(CommandHandler("fiyat", fiyat))
     application.add_handler(CommandHandler("ciz", ciz))
     
-    print(">>> BOT YAYINDA!")
+    print(">>> BOT TERTEMİZ BAŞLADI!")
+    # drop_pending_updates=True sayesinde o kırmızı Conflict hatasından kurtuluyoruz
     application.run_polling(drop_pending_updates=True)
     
