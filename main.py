@@ -1,111 +1,102 @@
 import os, asyncio, requests, time, aiohttp
-import xml.etree.ElementTree as ET
-from flask import Flask
+from flask import Flask, request, jsonify
 from threading import Thread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from urllib.parse import quote
 
-# --- 1. WEB SUNUCUSU ---
-app = Flask(__name__)
-@app.route('/')
-def home(): return "IRVUS MULTI-LANG: ACTIVE", 200
-
-def run_web():
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
-
-# --- 2. AYARLAR ---
+# --- AYARLAR ---
 TOKEN = "8621050385:AAFP8Pmc0p24oQnDEiL6SwMTgL6tr3HIPss"
+GROUP_ID = -1002315757919
 CA = "0x31EDA2dfd01c9C65385cCE6099B24b06ef3aE831"
-LOGO = "https://raw.githubusercontent.com/irvus-project/assets/main/logo.jpg"
 
-# --- 3. HABER MOTORU ---
-def get_live_news(query):
+app = Flask(__name__)
+
+@app.route('/')
+def home(): return "IRVUS ALCHEMY SYSTEM: LIVE", 200
+
+# --- 🟢 ANLIK ALIM KAPISI (WEBHOOK) ---
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    data = request.json
+    if data and 'event' in data:
+        # Alchemy sinyalini arka planda işle (Botun donmaması için)
+        Thread(target=process_buy_signal, args=(data,)).start()
+    return jsonify({"status": "received"}), 200
+
+def process_buy_signal(data):
     try:
-        url = f"https://news.google.com/rss/search?q={quote(query)}&hl=tr&gl=TR&ceid=TR:tr"
-        r = requests.get(url, timeout=10)
-        root = ET.fromstring(r.content)
-        headlines = [item.find('title').text for item in root.findall('.//item')[:3]]
-        return " | ".join(headlines) if headlines else "No news found."
-    except: return "Busy."
+        activity = data['event'].get('activity', [])
+        for act in activity:
+            tx_hash = act.get('hash')
+            value = act.get('value')
+            asset = act.get('asset', 'IRVUS')
+            from_addr = act.get('fromAddress', 'Unknown')
+            
+            # Sadece alımları (transferleri) yakala
+            if value and float(value) > 0:
+                msg = (f"🟢 **NEW IRVUS BUY!**\n\n"
+                       f"💰 Amount: **{float(value):,.0f} {asset}**\n"
+                       f"👤 Buyer: `{from_addr[:6]}...{from_addr[-4:]}`\n"
+                       f"🔗 [Basescan](https://basescan.org/tx/{tx_hash})\n\n"
+                       f"🚀 **TO THE MOON!**")
+                
+                # Telegram'a saniyesinde fırlat
+                requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", 
+                              json={"chat_id": GROUP_ID, "text": msg, "parse_mode": "Markdown"})
+    except: pass
 
-# --- 4. KOMUTLAR ---
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = (f"💎 **IRVUS GLOBAL AI (2026)**\n\n"
-           f"🇹🇷 Hoş geldiniz! Sorularınızı sorabilirsiniz.\n"
-           f"🇺🇸 Welcome! You can ask your questions.\n\n"
+# --- 🤖 YAPAY ZEKA VE KOMUTLAR (TR/EN) ---
+async def start(update, context):
+    msg = (f"💎 **IRVUS GLOBAL AI & BUY BOT**\n\n"
+           f"🇹🇷 Anlık alım takibi ve AI aktif!\n"
+           f"🇺🇸 Live buy tracking and AI active!\n\n"
            f"📄 CA: `{CA}`")
-    kb = [
-        [InlineKeyboardButton("🌐 Website", url="https://www.irvustoken.xyz")],
-        [InlineKeyboardButton("🐦 Twitter (X)", url="https://x.com/IRVUSTOKEN")]
-    ]
-    try:
-        await update.message.reply_photo(photo=LOGO, caption=msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
-    except:
-        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+    kb = [[InlineKeyboardButton("🌐 Website", url="https://www.irvustoken.xyz")]]
+    await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
-async def ask_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Dil korumalı /sor & /ask komutu"""
+async def ask_cmd(update, context):
     query = " ".join(context.args)
-    if not query: 
-        return await update.message.reply_text("🇹🇷 Bir soru yazın. / 🇺🇸 Write a question.")
-    
+    if not query: return await update.message.reply_text("🇹🇷 Lütfen soru yazın. / 🇺🇸 Please ask a question.")
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-    
-    # İnternetten güncel veriyi çekiyoruz
-    live_info = get_live_news(query)
-    
-    # DİL KONTROLÜ VE TALİMATI (Burayı sertleştirdim)
-    # AI'ya sorunun dili neyse o dilde cevap vermesini KESİN olarak emrediyoruz.
-    prompt = (f"SYSTEM INSTRUCTION: You are Irvus AI. Current date is April 8, 2026. "
-              f"CRITICAL: If the user asks in Turkish, you MUST answer in Turkish. "
-              f"If the user asks in English, you MUST answer in English. "
-              f"Latest info: {live_info}. User Question: {query}")
-    
+    prompt = f"Date: April 9, 2026. Respond in the language of the question. User says: {query}"
     try:
         url = f"https://text.pollinations.ai/{quote(prompt)}?model=openai"
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=25) as r:
                 ans = await r.text()
                 await update.message.reply_text(f"🤖 **Irvus AI:**\n\n{ans}")
-    except: 
-        await update.message.reply_text("Sistem yoğun, tekrar deneyin. / System busy, try again.")
+    except: await update.message.reply_text("System busy.")
 
-async def price_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def fiyat(update, context):
     try:
         url = f"https://api.geckoterminal.com/api/v2/networks/base/tokens/{CA}"
         r = requests.get(url, timeout=10).json()
         p = r['data']['attributes']['price_usd']
-        await update.message.reply_text(f"💰 **$IRVUS:** `${float(p):.8f}`")
-    except:
-        await update.message.reply_text("⚠️ Fiyat çekilemedi. / Price unavailable.")
+        await update.message.reply_text(f"💰 **IRVUS:** `${float(p):.8f}`")
+    except: await update.message.reply_text("⚠️ Fiyat çekilemedi.")
 
-async def draw_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    p = " ".join(context.args)
-    if not p: return await update.message.reply_text("❌ /draw <prompt>")
-    await update.message.reply_text("🎨 Processing / Çiziliyor...")
-    img = f"https://image.pollinations.ai/prompt/{quote(p)}?seed={int(time.time())}"
-    await update.message.reply_photo(photo=img, caption=f"🖼 `{p}`")
+# --- SİSTEM BAŞLATICI ---
+def run_web():
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 
-# --- 5. ANA ÇALIŞTIRICI ---
 async def main():
     Thread(target=run_web, daemon=True).start()
     application = ApplicationBuilder().token(TOKEN).build()
     
+    # Komutları Tanımla (Aliaslı)
     application.add_handler(CommandHandler(["start", "star"], start))
     application.add_handler(CommandHandler(["sor", "ask"], ask_cmd))
-    application.add_handler(CommandHandler(["fiyat", "price"], price_cmd))
-    application.add_handler(CommandHandler(["ciz", "draw"], draw_cmd))
-
+    application.add_handler(CommandHandler(["fiyat", "price"], fiyat))
+    
     async with application:
         await application.initialize()
         await application.start()
-        print(">>> IRVUS GLOBAL READY")
+        print(">>> SISTEM ALCHEMY ILE ANLIK MODDA!")
         await application.updater.start_polling(drop_pending_updates=True)
         while True: await asyncio.sleep(3600)
 
 if __name__ == "__main__":
     try: asyncio.run(main())
     except: pass
-                
+        
