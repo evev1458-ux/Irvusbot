@@ -13,31 +13,32 @@ CA = "0x31EDA2dfd01c9C65385cCE6099B24b06ef3aE831"
 app = Flask(__name__)
 
 @app.route('/')
-def home(): 
-    return "IRVUS ONLINE", 200
+def home(): return "IRVUS LIVE", 200
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.json
-    if data:
-        Thread(target=process_buy_signal, args=(data,)).start()
+    if data: Thread(target=process_buy_signal, args=(data,)).start()
     return jsonify({"status": "ok"}), 200
 
 def process_buy_signal(data):
     try:
-        activities = data.get('event', {}).get('activity', []) if isinstance(data, dict) else []
-        if not activities and isinstance(data, list): activities = data
-        for act in activities:
+        events = data.get('event', {}).get('activity', []) if isinstance(data, dict) else []
+        if not events and isinstance(data, list): events = data
+        for act in events:
             tx = act.get('hash') or act.get('transactionHash')
             val = act.get('value')
             if val and float(val) > 0:
                 msg = f"🟢 **NEW IRVUS BUY!**\n\n💰 Amount: **{float(val):,.0f} IRVUS**\n🔗 [Basescan](https://basescan.org/tx/{tx})"
-                requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", 
-                             json={"chat_id": GROUP_ID, "text": msg, "parse_mode": "Markdown"})
+                requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", json={"chat_id": GROUP_ID, "text": msg, "parse_mode": "Markdown"})
     except: pass
 
+# --- KOMUTLAR ---
 async def start(update, context):
-    kb = [[InlineKeyboardButton("🌐 Website", url="https://www.irvustoken.xyz")]]
+    kb = [
+        [InlineKeyboardButton("🌐 Website", url="https://www.irvustoken.xyz")],
+        [InlineKeyboardButton("🐦 Twitter (X)", url="https://x.com/irvustoken")]
+    ]
     await update.message.reply_text("💎 **IRVUS GLOBAL BOT**", reply_markup=InlineKeyboardMarkup(kb))
 
 async def fiyat(update, context):
@@ -56,12 +57,21 @@ async def ask_cmd(update, context):
                 await update.message.reply_text(await r.text())
     except: pass
 
+async def draw_cmd(update, context):
+    p = " ".join(context.args)
+    if not p: return await update.message.reply_text("Ne çizelim?")
+    await update.message.reply_text("🎨 Çiziliyor...")
+    url = f"https://pollinations.ai/p/{quote(p)}?width=1024&height=1024&seed=42"
+    try: await update.message.reply_photo(photo=url, caption=f"🖼 **Art:** {p}")
+    except: await update.message.reply_text("🎨 Hata.")
+
 async def main():
     Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))).start()
     app_bot = ApplicationBuilder().token(TOKEN).build()
     app_bot.add_handler(CommandHandler("start", start))
     app_bot.add_handler(CommandHandler(["fiyat", "price"], fiyat))
     app_bot.add_handler(CommandHandler(["sor", "ask"], ask_cmd))
+    app_bot.add_handler(CommandHandler(["ciz", "draw"], draw_cmd))
     
     await app_bot.initialize()
     await app_bot.start()
