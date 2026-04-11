@@ -1,98 +1,37 @@
-import os
-import requests
-import asyncio
-import threading
-import http.server
-import socketserver
+import os, requests, asyncio
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# --- AYARLAR ---
-TOKEN = "8621050385:AAHnY8zSX9VUhD3bm-v44sHaMWzxVWzq0_c"
-BASESCAN_API_KEY = "MG1FPDHVDA5FW76AJ3F88VNTHQACKI6KFA"
-POOL_ADDRESS = "0x074900A4058d84033C0b87441B3299F72D852077"
-BUY_LOG_CHAT_ID = "-1002393767346"
+# AYARLARI RENDER'DAN ALIYORUZ
+TOKEN = os.getenv("BOT_TOKEN")
+BASESCAN_API_KEY = os.getenv("API_KEY")
+POOL_ADDRESS = os.getenv("PAIR_ADDRESS")
+BUY_LOG_CHAT_ID = os.getenv("CHAT_ID")
 
 last_tx_hash = None
 
-# --- RENDER ÜCRETSİZ PLAN İÇİN SAHTE WEB SUNUCUSU ---
-def run_dummy_server():
-    # Render'ın beklediği portu açıyoruz (Genelde 10000 veya 8080 olur)
-    port = int(os.environ.get("PORT", 8080))
-    handler = http.server.SimpleHTTPRequestHandler
-    # Adres çakışmasını önlemek için allow_reuse_address kullanıyoruz
-    socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("", port), handler) as httpd:
-        print(f"🌐 Sahte sunucu {port} portunda aktif.")
-        httpd.serve_forever()
-
-# --- ALIM TAKİP MODÜLÜ ---
 async def check_buys(context: ContextTypes.DEFAULT_TYPE):
     global last_tx_hash
-    print("🦁 Alım takip sistemi uyanık...")
+    print("🦁 Takip başladı...")
     while True:
         try:
             url = f"https://api.etherscan.io/v2/api?chainid=8453&module=account&action=tokentx&address={POOL_ADDRESS}&startblock=0&endblock=99999999&sort=desc&apikey={BASESCAN_API_KEY}"
             response = requests.get(url).json()
-            if response.get('status') == '1':
-                transactions = response.get('result', [])
-                if transactions:
-                    latest_tx = transactions[0]
-                    tx_hash = latest_tx['hash']
-                    if tx_hash != last_tx_hash:
-                        if last_tx_hash is not None:
-                            value = int(latest_tx['value']) / 1000000
-                            mesaj = (
-                                f"🟢 **YENİ IRVUS ALIMI!** 🦁\n\n"
-                                f"💰 **Tutar:** {value:.2f} USDC\n"
-                                f"🔗 **İşlem:** [Basescan Linki](https://basescan.org/tx/{tx_hash})\n\n"
-                                f"🚀 #IRVUS #BaseChain"
-                            )
-                            await context.bot.send_message(chat_id=BUY_LOG_CHAT_ID, text=mesaj, parse_mode="Markdown", disable_web_page_preview=True)
-                        last_tx_hash = tx_hash
-        except Exception as e:
-            print(f"⚠️ Alım takip hatası: {e}")
+            if response.get('status') == '1' and response.get('result'):
+                latest_tx = response['result'][0]
+                tx_hash = latest_tx['hash']
+                if tx_hash != last_tx_hash:
+                    if last_tx_hash:
+                        value = int(latest_tx['value']) / 1000000
+                        mesaj = f"🟢 **YENİ IRVUS ALIMI!** 🦁\n\n💰 **Tutar:** {value:.2f} USDC\n🔗 [Basescan](https://basescan.org/tx/{tx_hash})"
+                        await context.bot.send_message(chat_id=BUY_LOG_CHAT_ID, text=mesaj, parse_mode="Markdown")
+                    last_tx_hash = tx_hash
+        except: pass
         await asyncio.sleep(30)
 
-# --- BOT KOMUTLARI ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🦁 Irvus AI aktif! \n/sor, /ciz, /fiyat emrindeyim.\nAlımlar otomatik takip ediliyor!")
-
-async def fiyat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📊 $IRVUS Fiyatı: Dexscreener verileri yolda...")
-
-async def sor(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_input = " ".join(context.args)
-    if not user_input:
-        await update.message.reply_text("🦁 Sorunu yaz kankam! Örn: /sor Irvus nedir?")
-        return
-    await update.message.reply_text(f"🧠 '{user_input}' sorunu yapay zekaya iletiyorum...")
-
-async def ciz(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_input = " ".join(context.args)
-    if not user_input:
-        await update.message.reply_text("🎨 Ne çizelim? Örn: /ciz aslan logolu coin")
-        return
-    await update.message.reply_text(f"🎨 '{user_input}' hayalini tuvale döküyorum...")
-
-# --- ANA ÇALIŞTIRICI ---
 if __name__ == '__main__':
-    # 1. Sahte web sunucusunu arka planda başlatıyoruz (Render'ı kandırmak için)
-    threading.Thread(target=run_dummy_server, daemon=True).start()
-    
-    # 2. Botu kuruyoruz
-    application = ApplicationBuilder().token(TOKEN).build()
-    
-    # 3. Komutları ekliyoruz
-    application.add_handler(CommandHandler('start', start))
-    application.add_handler(CommandHandler('fiyat', fiyat))
-    application.add_handler(CommandHandler('sor', sor))
-    application.add_handler(CommandHandler('ciz', ciz))
-    
-    # 4. Alım takibini başlatıyoruz
-    if application.job_queue:
-        application.job_queue.run_once(check_buys, 5)
-
-    print("🤖 Irvus AI ve Alım Takibi Başlatıldı...")
-    application.run_polling()
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler('start', lambda u, c: u.message.reply_text("🦁 Irvus Aktif!")))
+    if app.job_queue: app.job_queue.run_once(check_buys, 5)
+    app.run_polling()
     
