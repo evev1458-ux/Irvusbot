@@ -1,4 +1,2 @@
-flask
+python-telegram-bot[job-queue]
 requests
-python-telegram-bot
-aiohttp
