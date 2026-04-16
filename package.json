@@ -1,7 +1,7 @@
 {
   "name": "irvus-ai-buy-bot",
   "version": "1.0.0",
-  "description": "AI and Buy Bot for Telegram",
+  "description": "Irvus AI & Buy Bot for Base, Sol, ETH, BSC",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
