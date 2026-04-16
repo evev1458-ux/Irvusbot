@@ -155,3 +155,11 @@ bot.on('text', (ctx) => {
 });
 
 bot.launch();
+bot.launch()
+  .then(() => console.log("✅ Bot Telegram'a başarıyla bağlandı!"))
+  .catch((err) => console.error("❌ Bağlantı Hatası:", err));
+
+// Botun çökmesini önlemek için genel hata yakalayıcı
+process.on('unhandledRejection', (reason, promise) => {
+    console.log('Hata:', reason);
+});
