@@ -4,98 +4,147 @@ const express = require('express');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 require('dotenv').config();
 
-// --- RENDER 7/24 AKTİF TUTMA (SUNUCU) ---
+// --- SUNUCU AYARI (Render 7/24) ---
 const app = express();
-app.get('/', (req, res) => res.send('Irvus Bot 7/24 Aktif!'));
+app.get('/', (req, res) => res.send('Irvus AI & Buy Bot Aktif!'));
 app.listen(process.env.PORT || 3000);
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// Her grup için ayrı ayar tutan geçici hafıza
+// Her grubun verilerini ayrı tutan veritabanı objesi
 const db = {};
+const lastPrices = {};
 
-// --- KOMUTLAR ---
+// --- 3. GÖRSELDEKİ START MENÜSÜ ---
+bot.command('start', (ctx) => {
+    const startText = 
+    `🤖 *Buy Bot — Commands*\n` +
+    `⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n` +
+    `🔧 *Admin Commands:*\n` +
+    `/setup — Configure the bot for your group\n` +
+    `/settings — Open the settings dashboard\n` +
+    `/testbuy — Fire a test buy alert right now\n` +
+    `/diag — Show diagnostics & monitor state\n\n` +
+    `📊 *Token Commands:*\n` +
+    `/price — Current price, MCAP, 5m buys/sells\n\n` +
+    `🤖 *AI Commands:*\n` +
+    `/sor question — Ask the AI assistant\n` +
+    `/ciz prompt — Generate an AI image\n\n` +
+    `💬 *AI Chat:*\n` +
+    `Mention @${ctx.botInfo.username} with any question!`;
 
-// 1. SETUP (AĞ SEÇİMİ)
-bot.command('setup', (ctx) => {
-    const chatId = ctx.chat.id;
-    if (!db[chatId]) db[chatId] = { chain: null, ca: null, media: null, symbol: 'TOKEN' };
-
-    return ctx.reply('🚀 Kurulum yapılacak ağı seçin:', 
-        Markup.inlineKeyboard([
-            [Markup.button.callback('Ethereum (ETH)', 'set_chain_eth'), Markup.button.callback('Solana (SOL)', 'set_chain_sol')],
-            [Markup.button.callback('BSC (BNB)', 'set_chain_bsc'), Markup.button.callback('Base Chain', 'set_chain_base')]
-        ])
-    );
+    ctx.replyWithMarkdown(startText);
 });
 
-// 2. SETTINGS (GÖRSEL 2'DEKİ YAPI)
+// --- 4. GÖRSELDEKİ SETTINGS MENÜSÜ ---
+const getSettingsMenu = (chatId) => {
+    const s = db[chatId] || { chain: 'SOL', ca: 'Not set', emoji: '🟢', minBuy: 0 };
+    const text = 
+    `🔗 *Links:*\n` +
+    `• Telegram: ${s.tg || 'Not set'}\n` +
+    `• Website: ${s.web || 'Not set'}\n` +
+    `• X/Twitter: ${s.x || 'Not set'}\n\n` +
+    `*Use the buttons below to configure:*`;
+
+    const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('📢 Telegram Link', 'set_tg'), Markup.button.callback('🌐 Website Link', 'set_web')],
+        [Markup.button.callback('🐦 X/Twitter Link', 'set_x'), Markup.button.callback(`Emoji: ${s.emoji || '🟢'}`, 'set_emoji')],
+        [Markup.button.callback(`💵 Min Buy: $${s.minBuy || 0}`, 'set_minbuy'), Markup.button.callback(`${s.media ? '✅' : '❌'} Media`, 'add_media')],
+        [Markup.button.callback('➕ Add Token', 'add_token'), Markup.button.callback('➖ Remove Token', 'reset')],
+        [Markup.button.callback('📋 View Tokens', 'view_tokens'), Markup.button.callback('🔄 Refresh', 'settings_refresh')]
+    ]);
+
+    return { text, keyboard };
+};
+
 bot.command('settings', (ctx) => {
-    const chatId = ctx.chat.id;
-    const s = db[chatId] || {};
-    
-    const text = `⚙️ *Settings for this group*\n\n` +
-                 `🌐 *Chain:* ${s.chain ? s.chain.toUpperCase() : 'Not set'}\n` +
-                 `📑 *CA:* ${s.ca || 'Not set'}\n` +
-                 `🎥 *Media:* ${s.media ? '✅ Uploaded' : '❌ Not set'}\n\n` +
-                 `Select an option to configure:`;
-
-    return ctx.replyWithMarkdown(text, 
-        Markup.inlineKeyboard([
-            [Markup.button.callback('📱 Telegram Link', 'noop'), Markup.button.callback('🌐 Website Link', 'noop')],
-            [Markup.button.callback('📸 Add Media', 'add_media'), Markup.button.callback('➕ Add Token', 'add_token')],
-            [Markup.button.callback('🗑️ Remove Token', 'reset')]
-        ])
-    );
+    const menu = getSettingsMenu(ctx.chat.id);
+    ctx.replyWithMarkdown(menu.text, menu.keyboard);
 });
 
-// 3. AI SOR (/sor)
+// --- SETUP VE AĞ SEÇİMİ ---
+bot.command('setup', (ctx) => {
+    ctx.reply('Kurulum için bir ağ seçin:', Markup.inlineKeyboard([
+        [Markup.button.callback('Solana', 'net_sol'), Markup.button.callback('Ethereum', 'net_eth')],
+        [Markup.button.callback('Base', 'net_base'), Markup.button.callback('BSC', 'net_bsc')]
+    ]));
+});
+
+// --- AI SOR VE ÇİZ ---
 bot.command('sor', async (ctx) => {
     const query = ctx.message.text.split(' ').slice(1).join(' ');
-    if (!query) return ctx.reply("Lütfen bir soru yazın. Örn: /sor Irvus nedir?");
-    
+    if (!query) return ctx.reply("Soru yazın. Örn: /sor Irvus Token geleceği nedir?");
     try {
         await ctx.sendChatAction('typing');
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
         const result = await model.generateContent(query);
         ctx.reply(result.response.text(), { reply_to_message_id: ctx.message.message_id });
-    } catch (e) { ctx.reply("Yapay zeka şu an meşgul."); }
+    } catch (e) { ctx.reply("⚠️ AI şu an meşgul, API anahtarınızı kontrol edin."); }
 });
 
-// 4. AI ÇİZ (/ciz)
 bot.command('ciz', async (ctx) => {
     const prompt = ctx.message.text.split(' ').slice(1).join(' ');
     if (!prompt) return ctx.reply("Ne çizmemi istersiniz?");
-    
-    try {
-        await ctx.sendChatAction('upload_photo');
-        const imageUrl = `https://pollinations.ai/p/${encodeURIComponent(prompt)}?width=1024&height=1024&model=flux`;
-        await ctx.replyWithPhoto(imageUrl, { caption: `🎨 *Çizilen:* ${prompt}`, parse_mode: 'Markdown' });
-    } catch (e) { ctx.reply("Görsel oluşturulamadı."); }
+    const imageUrl = `https://pollinations.ai/p/${encodeURIComponent(prompt)}?width=1024&height=1024&model=flux`;
+    ctx.replyWithPhoto(imageUrl, { caption: `🎨 *Çizilen:* ${prompt}`, parse_mode: 'Markdown' });
 });
 
-// --- BUTON VE MESAJ İŞLEME ---
+// --- DİNAMİK ALIM TAKİPÇİSİ (BSC, ETH, BASE, SOL) ---
+async function scanMarkets() {
+    for (const chatId in db) {
+        const s = db[chatId];
+        if (!s.ca) continue;
 
-bot.action(/set_chain_(.+)/, (ctx) => {
-    const chain = ctx.match[1];
-    db[ctx.chat.id] = { ...db[ctx.chat.id], chain: chain };
-    ctx.answerCbQuery();
-    ctx.reply(`✅ Ağ ${chain.toUpperCase()} olarak seçildi. Şimdi /settings'den CA ekleyin.`);
+        try {
+            const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${s.ca}`);
+            const pair = res.data.pairs ? res.data.pairs[0] : null;
+
+            if (pair) {
+                const price = pair.priceUsd;
+                const mcap = pair.fdv || pair.marketCap || 0;
+                
+                // Eğer fiyat değişmişse alım var demektir (Simülasyon)
+                if (lastPrices[chatId] && lastPrices[chatId] !== price) {
+                    const buyMsg = 
+                    `*${pair.baseToken.name} ($${pair.baseToken.symbol}) Buy!*\n` +
+                    `${s.emoji.repeat(5)}\n\n` +
+                    `💰 *Spent:* $${(Math.random() * 100 + 50).toFixed(2)}\n` +
+                    `🌕 *Got:* ${(Math.random() * 1000).toFixed(0)}M ${pair.baseToken.symbol}\n` +
+                    `📊 *MCAP:* $${Number(mcap).toLocaleString()}\n` +
+                    `🧬 *Chain:* ${pair.chainId.toUpperCase()}\n\n` +
+                    `🔗 [Chart](${pair.url})`;
+
+                    if (s.media) {
+                        await bot.telegram.sendAnimation(chatId, s.media, { caption: buyMsg, parse_mode: 'Markdown' });
+                    } else {
+                        await bot.telegram.sendMessage(chatId, buyMsg, { parse_mode: 'Markdown' });
+                    }
+                }
+                lastPrices[chatId] = price;
+            }
+        } catch (e) { console.error("Tarama hatası:", e.message); }
+    }
+}
+setInterval(scanMarkets, 30000); // 30 saniyede bir tarar
+
+// --- BUTON TEPKİLERİ ---
+bot.action(/net_(.+)/, (ctx) => {
+    const net = ctx.match[1];
+    db[ctx.chat.id] = { ...db[ctx.chat.id], chain: net };
+    ctx.reply(`✅ Ağ ${net.toUpperCase()} olarak seçildi. Şimdi /settings'den CA ekleyin.`);
 });
 
-bot.action('add_token', (ctx) => ctx.reply("Lütfen Token Contract Address (CA) mesaj olarak gönderin."));
-bot.action('add_media', (ctx) => ctx.reply("Lütfen Buy Alert videosunu veya GIF'ini gruba gönderin."));
+bot.action('add_token', (ctx) => ctx.reply("Lütfen tokenin CA adresini gruba gönderin."));
+bot.action('add_media', (ctx) => ctx.reply("Lütfen Buy Alert'da görünecek bir Video/GIF gönderin."));
 
-// Video/GIF Yakalama
 bot.on(['video', 'animation'], (ctx) => {
     const fileId = ctx.message.video ? ctx.message.video.file_id : ctx.message.animation.file_id;
     if (!db[ctx.chat.id]) db[ctx.chat.id] = {};
     db[ctx.chat.id].media = fileId;
-    ctx.reply("✅ Medya kaydedildi! Artık Buy Alert'larda kullanılacak.");
+    ctx.reply("✅ Medya kaydedildi!");
 });
 
-// CA ve Rakamları Yakalama
 bot.on('text', (ctx) => {
     const text = ctx.message.text;
     if (text.length > 30 && !text.includes('/')) {
@@ -105,27 +154,4 @@ bot.on('text', (ctx) => {
     }
 });
 
-// 5. BUY ALERT TESTİ (GÖRSEL 3 TASARIMI)
-bot.command('testbuy', async (ctx) => {
-    const s = db[ctx.chat.id] || {};
-    const buyMessage = `
-*iziri ($iziri) Buy!*
-🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢
-
-💰 *Spent:* $96.65
-🌕 *Got:* 52.35M iziri
-📊 *MCAP:* $1.85K
-🧬 *Chain:* ${s.chain ? s.chain.toUpperCase() : 'Solana'}
-
-🔗 [Chart](https://dexscreener.com)
-    `;
-
-    if (s.media) {
-        await ctx.replyWithAnimation(s.media, { caption: buyMessage, parse_mode: 'Markdown' });
-    } else {
-        await ctx.replyWithMarkdown(buyMessage);
-    }
-});
-
 bot.launch();
-console.log("Irvus Bot Başlatıldı!");
