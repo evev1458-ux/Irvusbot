@@ -1,140 +1,99 @@
-import logging
-from telegram import Bot
-from telegram.error import TelegramError
-
-logger = logging.getLogger(__name__)
-
-
-def format_number(num: float) -> str:
-    """Sayıyı okunabilir formata çevir: 1500000 → 1.5M, 150000 → 150K"""
-    if num >= 1_000_000_000:
-        return f"{num/1_000_000_000:.2f}B"
-    elif num >= 1_000_000:
-        return f"{num/1_000_000:.2f}M"
-    elif num >= 1_000:
-        return f"{num/1_000:.2f}K"
+def format_number(n: float) -> str:
+    """Sayıyı okunabilir formata çevir: 1500000 → 1.5M"""
+    if n >= 1_000_000_000:
+        return f"{n/1_000_000_000:.2f}B"
+    elif n >= 1_000_000:
+        return f"{n/1_000_000:.2f}M"
+    elif n >= 1_000:
+        return f"{n/1_000:.2f}K"
     else:
-        return f"{num:.2f}"
+        return f"{n:.2f}"
 
-
-def format_tokens(num: float) -> str:
-    """Token miktarını formatla: 1000000 → 1,000,000"""
-    if num >= 1_000_000_000:
-        return f"{num/1_000_000_000:.2f}B"
-    elif num >= 1_000_000:
-        return f"{num/1_000_000:.2f}M"
-    elif num >= 1_000:
-        return f"{num/1_000:.2f}K"
+def format_usd(n: float) -> str:
+    """Dolar formatı"""
+    if n >= 1_000_000:
+        return f"${n/1_000_000:.2f}M"
+    elif n >= 1_000:
+        return f"${n/1_000:.2f}K"
     else:
-        return f"{num:,.0f}"
-
+        return f"${n:.2f}"
 
 def build_emoji_bar(amount_usd: float, emoji: str = "🟢") -> str:
     """Alım miktarına göre emoji bar oluştur"""
     if amount_usd < 50:
-        count = 3
+        count = 1
     elif amount_usd < 100:
-        count = 5
+        count = 3
     elif amount_usd < 500:
-        count = 8
+        count = 5
     elif amount_usd < 1000:
-        count = 10
+        count = 8
     elif amount_usd < 5000:
         count = 12
     else:
         count = 15
     return emoji * count
 
+def build_buy_message(buy: dict, cfg: dict) -> tuple:
+    """
+    Buy alert mesajı oluştur.
+    Döndürür: (text, emoji_bar)
+    """
+    name = buy.get("name", "Token")
+    symbol = buy.get("symbol", "???")
+    amount_usd = buy.get("amount_usd", 0)
+    amount_token = buy.get("amount_token", 0)
+    mcap = buy.get("mcap", 0)
+    chain = buy.get("chain", "sol").upper()
+    ca = buy.get("ca", "")
+    tx_hash = buy.get("tx_hash", "")
 
-def get_chain_info(chain: str) -> dict:
-    chains = {
-        "eth":  {"name": "Ethereum", "icon": "⟠", "explorer": "https://etherscan.io/tx/"},
-        "sol":  {"name": "Solana",   "icon": "◎", "explorer": "https://solscan.io/tx/"},
-        "bsc":  {"name": "BSC",      "icon": "🟡", "explorer": "https://bscscan.com/tx/"},
-        "base": {"name": "Base",     "icon": "🔵", "explorer": "https://basescan.org/tx/"},
-    }
-    return chains.get(chain, {"name": chain.upper(), "icon": "🌐", "explorer": ""})
+    emoji = cfg.get("emoji", "🟢")
+    tg_link = cfg.get("tg_link")
+    web_link = cfg.get("web_link")
+    x_link = cfg.get("x_link")
 
+    emoji_bar = build_emoji_bar(amount_usd, emoji)
 
-class BuyAlert:
-    async def send_buy_alert(self, bot: Bot, chat_id: int, tx_data: dict, config: dict):
-        """Güzel formatlı alım bildirimi gönder"""
-        try:
-            token_name   = tx_data.get("token_name", "Unknown")
-            token_symbol = tx_data.get("token_symbol", "???")
-            amount_usd   = float(tx_data.get("amount_usd", 0))
-            tokens_rcvd  = float(tx_data.get("tokens_received", 0))
-            mcap         = float(tx_data.get("mcap", 0))
-            chain        = tx_data.get("chain", "eth")
-            pair_url     = tx_data.get("pair_url", "")
+    # Chain explorer linkleri
+    explorer_url = ""
+    if chain == "SOL":
+        explorer_url = f"https://solscan.io/tx/{tx_hash}"
+    elif chain == "ETH":
+        explorer_url = f"https://etherscan.io/tx/{tx_hash}"
+    elif chain == "BSC":
+        explorer_url = f"https://bscscan.com/tx/{tx_hash}"
+    elif chain == "BASE":
+        explorer_url = f"https://basescan.org/tx/{tx_hash}"
 
-            emoji      = config.get("emoji", "🟢")
-            media_id   = config.get("media_file_id")
-            media_type = config.get("media_type", "gif")
-            tg_link    = config.get("tg_link", "")
-            web_link   = config.get("web_link", "")
-            x_link     = config.get("x_link", "")
+    # Dexscreener linki
+    dex_chain_map = {"SOL": "solana", "ETH": "ethereum", "BSC": "bsc", "BASE": "base"}
+    dex_chain = dex_chain_map.get(chain, "solana")
+    chart_url = f"https://dexscreener.com/{dex_chain}/{ca}"
 
-            chain_info = get_chain_info(chain)
-            emoji_bar  = build_emoji_bar(amount_usd, emoji)
+    text = (
+        f"*{name} (${symbol}) Buy!*\n\n"
+        f"{emoji_bar}\n\n"
+        f"💰 Spent: {format_usd(amount_usd)}\n"
+        f"🪙 Got: {format_number(amount_token)} {symbol}\n"
+        f"📊 MCAP: {format_usd(mcap)}\n"
+        f"⛓ Chain: {chain}\n"
+    )
 
-            # ─── Mesaj metni ───
-            text_lines = [
-                f"*{token_name} (${token_symbol}) Buy!*\n",
-                f"{emoji_bar}\n",
-                f"💰 Spent: *${amount_usd:,.2f}*",
-                f"🪙 Got: *{format_tokens(tokens_rcvd)} {token_symbol}*",
-            ]
+    # Linkler
+    links = []
+    if explorer_url:
+        links.append(f"[🔍 TX]({explorer_url})")
+    links.append(f"[📈 Chart]({chart_url})")
+    if tg_link:
+        links.append(f"[💬 TG]({tg_link})")
+    if web_link:
+        links.append(f"[🌐 Web]({web_link})")
+    if x_link:
+        links.append(f"[✖️ X]({x_link})")
 
-            if mcap > 0:
-                text_lines.append(f"📊 MCAP: *${format_number(mcap)}*")
+    if links:
+        text += "\n" + " | ".join(links)
 
-            text_lines.append(f"🔗 Chain: *{chain_info['name']}*")
-
-            # Linkler
-            link_parts = []
-            if pair_url:
-                link_parts.append(f"[📈 Chart]({pair_url})")
-            if tg_link:
-                link_parts.append(f"[📱 Telegram]({tg_link})")
-            if web_link:
-                link_parts.append(f"[🌐 Web]({web_link})")
-            if x_link:
-                link_parts.append(f"[✖️ X]({x_link})")
-
-            if link_parts:
-                text_lines.append("\n" + " | ".join(link_parts))
-
-            caption = "\n".join(text_lines)
-
-            # ─── Medya ile gönder ───
-            if media_id:
-                if media_type == "gif":
-                    await bot.send_animation(
-                        chat_id=chat_id,
-                        animation=media_id,
-                        caption=caption,
-                        parse_mode="Markdown"
-                    )
-                else:
-                    await bot.send_video(
-                        chat_id=chat_id,
-                        video=media_id,
-                        caption=caption,
-                        parse_mode="Markdown"
-                    )
-            else:
-                # Medya yoksa düz mesaj gönder
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=caption,
-                    parse_mode="Markdown",
-                    disable_web_page_preview=False
-                )
-
-            logger.info(f"✅ Buy alert gönderildi: chat={chat_id}, token={token_symbol}, amount=${amount_usd:.2f}")
-
-        except TelegramError as e:
-            logger.error(f"Telegram hatası (buy alert): {e}")
-        except Exception as e:
-            logger.error(f"Buy alert hatası: {e}")
+    return text, emoji_bar
+    
