@@ -1,106 +1,84 @@
 import json
 import os
-import threading
-from typing import List, Dict, Any
 
-DB_FILE = "data/bot_data.json"
+DB_FILE = "data.json"
 
 class Database:
     def __init__(self):
-        self.lock = threading.Lock()
-        os.makedirs("data", exist_ok=True)
         if not os.path.exists(DB_FILE):
-            self._write({})
+            with open(DB_FILE, "w") as f:
+                json.dump({}, f)
 
-    def _read(self) -> dict:
-        with open(DB_FILE, "r", encoding="utf-8") as f:
+    def _load(self):
+        with open(DB_FILE, "r") as f:
             return json.load(f)
 
-    def _write(self, data: dict):
-        with open(DB_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-
-    def _get_group(self, chat_id: int) -> dict:
-        data = self._read()
-        key = str(chat_id)
-        if key not in data:
-            data[key] = {"config": {}, "tokens": []}
-            self._write(data)
-        return data[key]
+    def _save(self, data):
+        with open(DB_FILE, "w") as f:
+            json.dump(data, f, indent=2)
 
     def get_group_config(self, chat_id: int) -> dict:
-        with self.lock:
-            return self._get_group(chat_id).get("config", {})
+        data = self._load()
+        key = str(chat_id)
+        if key not in data:
+            data[key] = {
+                "tg_link": None,
+                "web_link": None,
+                "x_link": None,
+                "emoji": "🟢",
+                "min_buy": 0,
+                "media_file_id": None,
+                "media_type": None,
+                "tokens": []
+            }
+            self._save(data)
+        return data[key]
 
-    def save_group_config(self, chat_id: int, config: dict):
-        with self.lock:
-            data = self._read()
-            key = str(chat_id)
-            if key not in data:
-                data[key] = {"config": {}, "tokens": []}
-            data[key]["config"] = config
-            self._write(data)
+    def set_group_config(self, chat_id: int, key: str, value):
+        data = self._load()
+        k = str(chat_id)
+        if k not in data:
+            self.get_group_config(chat_id)
+            data = self._load()
+        data[k][key] = value
+        self._save(data)
 
-    def get_tokens(self, chat_id: int) -> List[Dict]:
-        with self.lock:
-            return self._get_group(chat_id).get("tokens", [])
+    def get_tokens(self, chat_id: int) -> list:
+        cfg = self.get_group_config(chat_id)
+        return cfg.get("tokens", [])
 
     def add_token(self, chat_id: int, ca: str, chain: str):
-        with self.lock:
-            data = self._read()
-            key = str(chat_id)
-            if key not in data:
-                data[key] = {"config": {}, "tokens": []}
-            tokens = data[key]["tokens"]
-            # Duplicate kontrolü
-            if not any(t["ca"].lower() == ca.lower() for t in tokens):
-                tokens.append({"ca": ca, "chain": chain})
-                self._write(data)
+        data = self._load()
+        k = str(chat_id)
+        if k not in data:
+            self.get_group_config(chat_id)
+            data = self._load()
+        tokens = data[k].get("tokens", [])
+        # Aynı CA varsa ekleme
+        for t in tokens:
+            if t["ca"].lower() == ca.lower():
+                return False
+        tokens.append({"ca": ca, "chain": chain})
+        data[k]["tokens"] = tokens
+        self._save(data)
+        return True
 
     def remove_token(self, chat_id: int, ca: str):
-        with self.lock:
-            data = self._read()
-            key = str(chat_id)
-            if key in data:
-                data[key]["tokens"] = [
-                    t for t in data[key]["tokens"]
-                    if t["ca"].lower() != ca.lower()
-                ]
-                self._write(data)
+        data = self._load()
+        k = str(chat_id)
+        if k not in data:
+            return False
+        tokens = data[k].get("tokens", [])
+        new_tokens = [t for t in tokens if t["ca"].lower() != ca.lower()]
+        data[k]["tokens"] = new_tokens
+        self._save(data)
+        return True
 
-    def get_all_groups_with_tokens(self) -> List[Dict]:
-        """Tüm grupları ve tokenlerini döndür (monitoring için)"""
-        with self.lock:
-            data = self._read()
-            result = []
-            for chat_id, group_data in data.items():
-                tokens = group_data.get("tokens", [])
-                if tokens:
-                    result.append({
-                        "chat_id": int(chat_id),
-                        "tokens": tokens,
-                        "config": group_data.get("config", {})
-                    })
-            return result
-
-    def get_last_tx(self, chat_id: int, ca: str) -> str:
-        """Son işlenen tx hash'ini döndür"""
-        with self.lock:
-            data = self._read()
-            key = str(chat_id)
-            if key in data:
-                txs = data[key].get("last_txs", {})
-                return txs.get(ca.lower(), "")
-            return ""
-
-    def set_last_tx(self, chat_id: int, ca: str, tx_hash: str):
-        """Son işlenen tx hash'ini kaydet"""
-        with self.lock:
-            data = self._read()
-            key = str(chat_id)
-            if key not in data:
-                data[key] = {"config": {}, "tokens": [], "last_txs": {}}
-            if "last_txs" not in data[key]:
-                data[key]["last_txs"] = {}
-            data[key]["last_txs"][ca.lower()] = tx_hash
-            self._write(data)
+    def get_all_groups_with_tokens(self) -> list:
+        data = self._load()
+        result = []
+        for chat_id, cfg in data.items():
+            if cfg.get("tokens"):
+                result.append({"chat_id": int(chat_id), "config": cfg})
+        return result
+        
