@@ -1,21 +1,36 @@
 import json
 import os
+import logging
 
+logger = logging.getLogger(__name__)
 DB_FILE = "data.json"
 
 class Database:
     def __init__(self):
+        # Dosya yoksa oluştur, varsa dokunma
         if not os.path.exists(DB_FILE):
-            with open(DB_FILE, "w") as f:
-                json.dump({}, f)
+            try:
+                with open(DB_FILE, "w") as f:
+                    json.dump({}, f)
+            except Exception as e:
+                logger.error(f"DB oluşturma hatası: {e}")
 
     def _load(self):
-        with open(DB_FILE, "r") as f:
-            return json.load(f)
+        try:
+            if not os.path.exists(DB_FILE): return {}
+            with open(DB_FILE, "r") as f:
+                content = f.read()
+                return json.loads(content) if content else {}
+        except Exception as e:
+            logger.error(f"DB yükleme hatası: {e}")
+            return {}
 
     def _save(self, data):
-        with open(DB_FILE, "w") as f:
-            json.dump(data, f, indent=2)
+        try:
+            with open(DB_FILE, "w") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            logger.error(f"DB kaydetme hatası: {e}")
 
     def get_group_config(self, chat_id: int) -> dict:
         data = self._load()
@@ -38,6 +53,7 @@ class Database:
         data = self._load()
         k = str(chat_id)
         if k not in data:
+            # Config yoksa oluştur
             self.get_group_config(chat_id)
             data = self._load()
         data[k][key] = value
@@ -53,11 +69,13 @@ class Database:
         if k not in data:
             self.get_group_config(chat_id)
             data = self._load()
+        
         tokens = data[k].get("tokens", [])
         # Aynı CA varsa ekleme
         for t in tokens:
             if t["ca"].lower() == ca.lower():
                 return False
+                
         tokens.append({"ca": ca, "chain": chain})
         data[k]["tokens"] = tokens
         self._save(data)
@@ -66,8 +84,8 @@ class Database:
     def remove_token(self, chat_id: int, ca: str):
         data = self._load()
         k = str(chat_id)
-        if k not in data:
-            return False
+        if k not in data: return False
+        
         tokens = data[k].get("tokens", [])
         new_tokens = [t for t in tokens if t["ca"].lower() != ca.lower()]
         data[k]["tokens"] = new_tokens
@@ -77,8 +95,13 @@ class Database:
     def get_all_groups_with_tokens(self) -> list:
         data = self._load()
         result = []
+        if not data: return [] # Eğer data None ise boş liste dön
+        
         for chat_id, cfg in data.items():
-            if cfg.get("tokens"):
-                result.append({"chat_id": int(chat_id), "config": cfg})
+            if isinstance(cfg, dict) and cfg.get("tokens"):
+                try:
+                    result.append({"chat_id": int(chat_id), "config": cfg})
+                except ValueError:
+                    continue
         return result
         
