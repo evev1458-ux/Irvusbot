@@ -1,6 +1,12 @@
-python-telegram-bot
+python-telegram-bot==20.8
 openai
 python-dotenv
 aiosqlite
 flask
 aiohttp
+requests
+web3
+eth-utils
+base58
+solders
+solana
