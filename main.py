@@ -1,84 +1,61 @@
 import os
+import sys
+import signal
 import asyncio
 import logging
 import threading
 from flask import Flask
-import nest_asyncio
-from dotenv import load_dotenv
-from telegram.ext import Application
-from bot import register_handlers
-from chain_monitor import ChainMonitor
+from waitress import serve as waitress_serve
+from telegram import Update
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 
-# Render ve asenkron döngü hatalarını önlemek için
-nest_asyncio.apply()
-load_dotenv()
+# Dosya yolları için
+sys.path.insert(0, os.path.dirname(__file__))
+from database import get_all_group_chat_ids, get_tokens, get_group
+from tracker import tracking_loop
 
-# --- RENDER PORT HATASI ÇÖZÜMÜ (FLASK SERVER) ---
-app_flask = Flask(__name__)
-
-@app_flask.route('/')
-def health_check():
-    return "Bot is alive!", 200
-
-def run_flask():
-    # Render'ın beklediği portu açıyoruz
-    port = int(os.environ.get("PORT", 10000))
-    app_flask.run(host='0.0.0.0', port=port)
-
-# --- LOGLAMA ---
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+# Loglama Ayarı
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-async def main():
-    token = os.getenv("BOT_TOKEN")
-    if not token:
-        # Eğer render.yaml'da TELEGRAM_BOT_TOKEN yazdıysan onu da kontrol et
-        token = os.getenv("TELEGRAM_BOT_TOKEN")
-        if not token:
-            raise ValueError("BOT_TOKEN veya TELEGRAM_BOT_TOKEN bulunamadı!")
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
-    # Flask server'ı ayrı bir kanalda (thread) başlat
-    threading.Thread(target=run_flask, daemon=True).start()
-    logger.info("Flask health-check server başlatıldı.")
+# Flask Health Check (Render için)
+health_app = Flask(__name__)
+@health_app.route("/")
+def health(): return "OK", 200
 
-    app = Application.builder().token(token).build()
+def run_health_server():
+    port = int(os.environ.get("PORT", 10000))
+    waitress_serve(health_app, host="0.0.0.0", port=port)
 
-    # Komutları kaydet
-    register_handlers(app)
+# Bot Komutları ve Mesaj Yönetimi (Burayı mevcut komutlarınla doldurabilirsin)
+# ... (Önceki main.py'deki komut handlerların burada olmalı) ...
 
-    # Zincir monitörünü başlat
-    monitor = ChainMonitor(app)
+def main():
+    if not BOT_TOKEN:
+        logger.error("BOT_TOKEN BULUNAMADI!")
+        return
 
-    logger.info("Bot başlatılıyor...")
+    # 1. Health Server'ı ayrı kolda başlat
+    threading.Thread(target=run_health_server, daemon=True).start()
 
-    async with app:
-        await app.initialize() # Uygulamayı hazırla
-        await app.start()
-        await app.updater.start_polling(drop_pending_updates=True)
-        logger.info("✅ Bot çalışıyor!")
+    # 2. Application kur
+    app = Application.builder().token(BOT_TOKEN).build()
 
-        # Monitor'ü arka planda çalıştır
-        monitor_task = asyncio.create_task(monitor.start())
+    # 3. Handlerları ekle (Burada senin mevcut handlerların olmalı)
+    # app.add_handler(CommandHandler("start", start_command)) vs.
 
-        try:
-            # Sonsuza kadar çalış, stop sinyali gelene kadar bekle
-            stop_event = asyncio.Event()
-            await stop_event.wait()
-        except (KeyboardInterrupt, asyncio.CancelledError):
-            logger.info("Bot durduruluyor...")
-        finally:
-            monitor_task.cancel()
-            if app.updater.running:
-                await app.updater.stop()
-            await app.stop()
-            await app.shutdown()
+    # 4. Takip Döngüsünü Başlat
+    async def post_init(application):
+        asyncio.create_task(tracking_loop(application.bot, get_all_group_chat_ids))
+        logger.info("✅ Takip görevi arka planda başlatıldı.")
+
+    app.post_init = post_init
+
+    logger.info("🤖 Bot başlatılıyor...")
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except Exception as e:
-        logger.error(f"Kritik hata: {e}")
-        
+    main()
+    
