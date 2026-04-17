@@ -1,16 +1,13 @@
 import os
 import asyncio
 import logging
-import aiohttp
-import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, filters
 )
 from database import Database
-from chain_monitor import ChainMonitor
-from buy_alert import BuyAlert
+from ai_handler import ask_ai, draw_image
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -19,185 +16,126 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 db = Database()
-buy_alert_handler = BuyAlert()
 
-# ─────────────────────────────────────────────
-# /start
-# ─────────────────────────────────────────────
+# Geçici state (setup akışı için)
+user_states = {}
+
+# ─── /start ───────────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "🦊 *IRVUS Buy Bot'a Hoş Geldiniz!*\n\n"
         "📋 *Komutlar:*\n"
+        "🔧 /setup — Token kur\n"
         "⚙️ /settings — Grup ayarları\n"
-        "🔧 /setup — Token kurulumu\n"
-        "🎨 /draw <prompt> — AI görsel oluştur\n"
-        "🤖 /sor <soru> — Yapay zekaya sor\n"
         "📊 /status — Bot durumu\n"
+        "🤖 /sor <soru> — Yapay zekaya sor\n"
+        "🎨 /draw <prompt> — AI görsel üret\n"
         "❓ /help — Yardım"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
-# ─────────────────────────────────────────────
-# /help
-# ─────────────────────────────────────────────
+# ─── /help ────────────────────────────────────────────────────────────────────
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "🆘 *Yardım Menüsü*\n\n"
-        "*/setup* — Token ekle (ağ seç → CA gir)\n"
-        "*/settings* — Grup ayarlarını düzenle\n"
+        "*/setup* — Token ekle: ağ seç → CA gir\n"
+        "*/settings* — Grup ayarları:\n"
         "  • Telegram / Web / X linkleri\n"
         "  • Özel emoji\n"
-        "  • Min alım miktarı\n"
+        "  • Min alım miktarı ($)\n"
         "  • GIF/Video yükle\n"
-        "*/draw <metin>* — AI ile görsel üret (ücretsiz)\n"
-        "*/sor <soru>* — Yapay zeka ile sohbet et (ücretsiz)\n"
-        "*/status* — Aktif token & zincir bilgisi\n\n"
-        "💡 Her grup *ayrı* ayarlarla çalışır.\n"
-        "💡 CA'yı gruba atınca bot otomatik algılar."
+        "*/sor <soru>* — Yapay zekaya sor\n"
+        "  Örnek: `/sor Bitcoin nedir?`\n"
+        "*/draw <metin>* — AI görsel üret\n"
+        "  Örnek: `/draw uzayda uçan tilki`\n"
+        "*/status* — Token & ayar bilgisi\n\n"
+        "💡 Her grup ayrı ayarlarla çalışır."
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
-# ─────────────────────────────────────────────
-# /status
-# ─────────────────────────────────────────────
+# ─── /status ──────────────────────────────────────────────────────────────────
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     cfg = db.get_group_config(chat_id)
     tokens = db.get_tokens(chat_id)
 
-    if not tokens:
-        await update.message.reply_text("⚠️ Henüz token eklenmedi. /setup ile ekleyin.")
-        return
+    lines = [f"📊 *Grup Durumu*\n"]
+    if tokens:
+        for t in tokens:
+            lines.append(f"• `{t['ca']}` — {t['chain'].upper()}")
+    else:
+        lines.append("⚠️ Token yok — /setup ile ekleyin")
 
-    lines = ["📊 *Grup Durumu*\n"]
-    for t in tokens:
-        lines.append(f"• `{t['ca']}` — {t['chain'].upper()}")
     lines.append(f"\n{cfg.get('emoji','🟢')} Emoji: {cfg.get('emoji','🟢')}")
     lines.append(f"💰 Min Alım: ${cfg.get('min_buy', 0)}")
     lines.append(f"🎬 Medya: {'✅ Yüklendi' if cfg.get('media_file_id') else '❌ Yok'}")
+    lines.append(f"💬 Telegram: {cfg.get('tg_link') or 'Ayarlanmadı'}")
+    lines.append(f"🌐 Website: {cfg.get('web_link') or 'Ayarlanmadı'}")
+    lines.append(f"✖️ X: {cfg.get('x_link') or 'Ayarlanmadı'}")
 
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
-# ─────────────────────────────────────────────
-# /sor — Yapay Zeka (Groq, tamamen ücretsiz)
-# ─────────────────────────────────────────────
+# ─── /sor ─────────────────────────────────────────────────────────────────────
 async def sor_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
-            "🤖 Kullanım: /sor <sorunuzu yazın>\n\n"
-            "Örnek: /sor Bitcoin ne zaman 100k olur?\n"
-            "Örnek: /sor IRVUS token nedir?"
+            "🤖 *Yapay Zeka*\n\nKullanım: `/sor <sorunuzu yazın>`\n\n"
+            "Örnek: `/sor Solana nedir?`",
+            parse_mode="Markdown"
         )
         return
 
     soru = " ".join(context.args)
     msg = await update.message.reply_text("🤖 Düşünüyorum...")
 
-    groq_api_key = os.getenv("GROQ_API_KEY", "")
-    if not groq_api_key:
-        await msg.edit_text(
-            "❌ GROQ_API_KEY eksik!\n"
-            "https://console.groq.com adresinden ücretsiz API key alın\n"
-            "ve .env dosyasına ekleyin."
-        )
-        return
-
     try:
-        async with aiohttp.ClientSession() as session:
-            payload = {
-                "model": "llama3-8b-8192",
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            "Sen IRVUS Token topluluğunun yapay zeka asistanısın. "
-                            "Kripto para, DeFi, Solana, Ethereum, BSC, token analizi konularında uzmansın. "
-                            "Her zaman Türkçe yanıt ver. Kısa, net ve faydalı ol. "
-                            "Emoji kullan. Yatırım tavsiyesi verme, sadece bilgi ver."
-                        )
-                    },
-                    {"role": "user", "content": soru}
-                ],
-                "max_tokens": 1024,
-                "temperature": 0.7
-            }
-            headers = {
-                "Authorization": f"Bearer {groq_api_key}",
-                "Content-Type": "application/json"
-            }
-            async with session.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                json=payload,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=30)
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    yanit = data["choices"][0]["message"]["content"]
-                    await msg.edit_text(
-                        f"🤖 *Yapay Zeka:*\n\n{yanit}",
-                        parse_mode="Markdown"
-                    )
-                else:
-                    error_text = await resp.text()
-                    logger.error(f"Groq API hatası {resp.status}: {error_text}")
-                    await msg.edit_text("❌ AI yanıt vermedi. Biraz sonra tekrar dene.")
-    except asyncio.TimeoutError:
-        await msg.edit_text("⏰ Zaman aşımı. Tekrar dene.")
+        cevap = await ask_ai(soru)
+        await msg.edit_text(
+            f"🤖 *Yapay Zeka Cevabı:*\n\n{cevap}",
+            parse_mode="Markdown"
+        )
     except Exception as e:
-        logger.error(f"sor_cmd hatası: {e}")
-        await msg.edit_text("❌ Bir hata oluştu. Tekrar dene.")
+        logger.error(f"AI error: {e}")
+        await msg.edit_text("❌ Yapay zeka şu an yanıt veremiyor.")
 
-# ─────────────────────────────────────────────
-# /draw — AI Görsel (Pollinations, tamamen ücretsiz)
-# ─────────────────────────────────────────────
+# ─── /draw ────────────────────────────────────────────────────────────────────
 async def draw_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
-            "🎨 Kullanım: /draw <görsel açıklaması>\n\n"
-            "Örnek: /draw a cool fox riding a rocket in space, neon colors\n"
-            "Örnek: /draw irvus token logo, fox with sunglasses"
+            "🎨 *AI Görsel Üret*\n\nKullanım: `/draw <ne çizmek istiyorsunuz>`\n\n"
+            "Örnek: `/draw uzayda uçan tilki`",
+            parse_mode="Markdown"
         )
         return
 
     prompt = " ".join(context.args)
-    msg = await update.message.reply_text("🎨 Görsel oluşturuluyor... (15-30 saniye)")
+    msg = await update.message.reply_text("🎨 Görsel oluşturuluyor...")
 
     try:
-        import urllib.parse
-        encoded = urllib.parse.quote(prompt)
-        url = f"https://image.pollinations.ai/prompt/{encoded}?width=512&height=512&nologo=true&seed={hash(prompt) % 99999}"
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
-                if resp.status == 200:
-                    img_data = await resp.read()
-                    await msg.delete()
-                    await update.message.reply_photo(
-                        photo=img_data,
-                        caption=f"🎨 *AI Görsel*\n📝 _{prompt}_",
-                        parse_mode="Markdown"
-                    )
-                else:
-                    await msg.edit_text("❌ Görsel oluşturulamadı. Tekrar dene.")
-    except asyncio.TimeoutError:
-        await msg.edit_text("⏰ Zaman aşımı. Tekrar dene.")
+        image_url = await draw_image(prompt)
+        if image_url:
+            await update.message.reply_photo(
+                photo=image_url,
+                caption=f"🎨 *{prompt}*",
+                parse_mode="Markdown"
+            )
+            await msg.delete()
+        else:
+            await msg.edit_text("❌ Görsel oluşturulamadı, tekrar deneyin.")
     except Exception as e:
-        logger.error(f"draw_cmd hatası: {e}")
-        await msg.edit_text("❌ Bir hata oluştu. Tekrar dene.")
+        logger.error(f"Draw error: {e}")
+        await msg.edit_text("❌ Görsel servisi çalışmıyor.")
 
-# ─────────────────────────────────────────────
-# /setup — Token Kurulumu
-# ─────────────────────────────────────────────
+# ─── /setup ───────────────────────────────────────────────────────────────────
 async def setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [
-            InlineKeyboardButton("⟠ Ethereum (ETH)", callback_data="setup_chain_eth"),
-            InlineKeyboardButton("◎ Solana (SOL)", callback_data="setup_chain_sol"),
+            InlineKeyboardButton("⚡ Solana", callback_data="setup_sol"),
+            InlineKeyboardButton("🔷 Ethereum", callback_data="setup_eth"),
         ],
         [
-            InlineKeyboardButton("🟡 BSC (BNB)", callback_data="setup_chain_bsc"),
-            InlineKeyboardButton("🔵 Base", callback_data="setup_chain_base"),
+            InlineKeyboardButton("🟡 BSC", callback_data="setup_bsc"),
+            InlineKeyboardButton("🔵 Base", callback_data="setup_base"),
         ]
     ]
     await update.message.reply_text(
@@ -206,9 +144,7 @@ async def setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-# ─────────────────────────────────────────────
-# /settings — Grup Ayarları
-# ─────────────────────────────────────────────
+# ─── /settings ────────────────────────────────────────────────────────────────
 async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     cfg = db.get_group_config(chat_id)
@@ -216,13 +152,13 @@ async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = (
         f"⚙️ *Settings for this group*\n\n"
-        f"📱 Telegram: {cfg.get('tg_link','Not set')}\n"
-        f"🌐 Website: {cfg.get('web_link','Not set')}\n"
-        f"✖️ X: {cfg.get('x_link','Not set')}\n"
-        f"😀 Emoji: {cfg.get('emoji','🟢')}\n"
-        f"💰 Min Buy: ${cfg.get('min_buy',0)}\n"
+        f"📱 Telegram: {cfg.get('tg_link') or 'Not set'}\n"
+        f"🌐 Website: {cfg.get('web_link') or 'Not set'}\n"
+        f"✖️ X: {cfg.get('x_link') or 'Not set'}\n"
+        f"😀 Emoji: {cfg.get('emoji', '🟢')}\n"
+        f"💰 Min Buy: ${cfg.get('min_buy', 0)}\n"
         f"🎬 Media: {'✅ Uploaded' if cfg.get('media_file_id') else '❌ Not set'}\n"
-        f"🪙 Tokens tracked: {len(tokens) if tokens else 0}\n\n"
+        f"🔗 Tokens tracked: {len(tokens)}\n\n"
         f"Select an option to configure:"
     )
 
@@ -240,222 +176,201 @@ async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🎬 Add Media", callback_data="set_media"),
         ],
         [
-            InlineKeyboardButton("➕ Add Token", callback_data="add_token"),
-            InlineKeyboardButton("🗑️ Remove Token", callback_data="remove_token"),
-        ]
+            InlineKeyboardButton("➕ Add Token", callback_data="set_addtoken"),
+            InlineKeyboardButton("🗑️ Remove Token", callback_data="set_removetoken"),
+        ],
     ]
+
     await update.message.reply_text(
         text,
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown"
     )
 
-# ─────────────────────────────────────────────
-# Callback Handler
-# ─────────────────────────────────────────────
+# ─── Callback handler ─────────────────────────────────────────────────────────
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     chat_id = query.message.chat_id
+    user_id = query.from_user.id
     data = query.data
 
-    chain_names = {"eth": "Ethereum", "sol": "Solana", "bsc": "BSC", "base": "Base"}
-
-    if data.startswith("setup_chain_") or data.startswith("addtoken_"):
-        chain = data.split("_")[-1]
-        context.user_data["pending_chain"] = chain
-        context.user_data["pending_chat_id"] = chat_id
+    # ── Setup: zincir seç ──
+    if data.startswith("setup_") and data in ["setup_sol", "setup_eth", "setup_bsc", "setup_base"]:
+        chain = data.replace("setup_", "")
+        user_states[user_id] = {"action": "awaiting_ca", "chain": chain}
+        chain_names = {"sol": "Solana", "eth": "Ethereum", "bsc": "BSC", "base": "Base"}
         await query.edit_message_text(
-            f"✅ *{chain_names.get(chain, chain)}* seçildi!\n\n"
-            f"Şimdi token contract adresini (CA) bu gruba yazın.\n"
-            f"Bot otomatik algılayacak. 🚀",
+            f"✅ *{chain_names[chain]}* seçildi.\n\n"
+            f"Şimdi token contract adresini (CA) gönderin:",
             parse_mode="Markdown"
         )
 
+    # ── Settings: link/emoji/minbuy ayarla ──
     elif data == "set_tg":
-        context.user_data[f"awaiting_{chat_id}"] = "tg_link"
-        await query.edit_message_text("📱 Telegram grup/kanal linkini yazın:\nÖrnek: https://t.me/grupadi")
+        user_states[user_id] = {"action": "set_tg", "chat_id": chat_id}
+        await query.edit_message_text("📱 Telegram grup linkini gönderin:\nÖrnek: https://t.me/grupadi")
 
     elif data == "set_web":
-        context.user_data[f"awaiting_{chat_id}"] = "web_link"
-        await query.edit_message_text("🌐 Website linkini yazın:\nÖrnek: https://irvustoken.com")
+        user_states[user_id] = {"action": "set_web", "chat_id": chat_id}
+        await query.edit_message_text("🌐 Website linkini gönderin:\nÖrnek: https://siteniz.com")
 
     elif data == "set_x":
-        context.user_data[f"awaiting_{chat_id}"] = "x_link"
-        await query.edit_message_text("✖️ X linkini yazın:\nÖrnek: https://x.com/irvustoken")
+        user_states[user_id] = {"action": "set_x", "chat_id": chat_id}
+        await query.edit_message_text("✖️ X (Twitter) linkini gönderin:\nÖrnek: https://x.com/hesabiniz")
 
     elif data == "set_emoji":
-        context.user_data[f"awaiting_{chat_id}"] = "emoji"
-        await query.edit_message_text("😀 Alım bildirimlerinde gösterilecek emojiyi gönderin:\nÖrnek: 🚀 🦊 💎 🌙")
+        user_states[user_id] = {"action": "set_emoji", "chat_id": chat_id}
+        await query.edit_message_text("😀 Kullanmak istediğiniz emojiyi gönderin:\nÖrnek: 🚀 veya 💎")
 
     elif data == "set_minbuy":
-        context.user_data[f"awaiting_{chat_id}"] = "min_buy"
-        await query.edit_message_text("💰 Minimum alım $ miktarını yazın:\nÖrnek: 10\n(0 = hepsini göster)")
+        user_states[user_id] = {"action": "set_minbuy", "chat_id": chat_id}
+        await query.edit_message_text("💰 Minimum alım miktarını $ olarak gönderin:\nÖrnek: 50")
 
     elif data == "set_media":
-        cfg = db.get_group_config(chat_id)
-        cfg["awaiting_media"] = True
-        db.save_group_config(chat_id, cfg)
-        await query.edit_message_text("🎬 GIF veya Video gönderin.\nAlım bildirimlerinin başında gösterilecek.")
+        user_states[user_id] = {"action": "set_media", "chat_id": chat_id}
+        await query.edit_message_text(
+            "🎬 GIF, video veya fotoğraf gönderin.\n"
+            "Bu medya her alım bildiriminin üstünde görünecek."
+        )
 
-    elif data == "add_token":
+    elif data == "set_addtoken":
         keyboard = [
             [
-                InlineKeyboardButton("⟠ ETH", callback_data="addtoken_eth"),
-                InlineKeyboardButton("◎ SOL", callback_data="addtoken_sol"),
+                InlineKeyboardButton("⚡ Solana", callback_data="setup_sol"),
+                InlineKeyboardButton("🔷 Ethereum", callback_data="setup_eth"),
             ],
             [
-                InlineKeyboardButton("🟡 BSC", callback_data="addtoken_bsc"),
-                InlineKeyboardButton("🔵 Base", callback_data="addtoken_base"),
+                InlineKeyboardButton("🟡 BSC", callback_data="setup_bsc"),
+                InlineKeyboardButton("🔵 Base", callback_data="setup_base"),
             ]
         ]
         await query.edit_message_text(
-            "➕ *Token Ekle* — Hangi ağ?",
+            "➕ *Token Ekle*\n\nHangi ağa eklemek istiyorsunuz?",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown"
         )
 
-    elif data == "remove_token":
+    elif data == "set_removetoken":
         tokens = db.get_tokens(chat_id)
         if not tokens:
-            await query.edit_message_text("❌ Silinecek token yok.")
+            await query.edit_message_text("⚠️ Silinecek token yok.")
             return
-        buttons = []
+        keyboard = []
         for t in tokens:
-            short = t['ca'][:8] + "..." + t['ca'][-4:]
-            buttons.append([InlineKeyboardButton(
-                f"🗑️ {short} ({t['chain'].upper()})",
-                callback_data=f"deltoken_{t['ca']}"
-            )])
-        await query.edit_message_text("🗑️ Silmek istediğiniz token:", reply_markup=InlineKeyboardMarkup(buttons))
-
-    elif data.startswith("deltoken_"):
-        ca = data.replace("deltoken_", "")
-        db.remove_token(chat_id, ca)
-        await query.edit_message_text(f"✅ Token silindi: `{ca}`", parse_mode="Markdown")
-
-    elif data.startswith("autoaddtoken_"):
-        parts = data.split("_", 3)
-        chain = parts[2]
-        ca = parts[3]
-        db.add_token(chat_id, ca, chain)
+            short_ca = t['ca'][:8] + "..."
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"🗑️ {t['chain'].upper()} - {short_ca}",
+                    callback_data=f"rmtoken_{t['ca']}"
+                )
+            ])
         await query.edit_message_text(
-            f"✅ Token eklendi!\n🪙 `{ca}`\n🌐 {chain.upper()}\n\nAlımlar izleniyor 🚀",
-            parse_mode="Markdown"
+            "🗑️ Hangi tokeni silmek istiyorsunuz?",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-# ─────────────────────────────────────────────
-# Media Handler
-# ─────────────────────────────────────────────
-async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    cfg = db.get_group_config(chat_id)
-
-    if not cfg.get("awaiting_media"):
-        return
-
-    file_id = None
-    media_type = None
-    if update.message.animation:
-        file_id = update.message.animation.file_id
-        media_type = "gif"
-    elif update.message.video:
-        file_id = update.message.video.file_id
-        media_type = "video"
-
-    if file_id:
-        cfg["media_file_id"] = file_id
-        cfg["media_type"] = media_type
-        cfg.pop("awaiting_media", None)
-        db.save_group_config(chat_id, cfg)
-        await update.message.reply_text("✅ Medya kaydedildi! Alım bildirimlerinde gösterilecek. 🎬")
-
-# ─────────────────────────────────────────────
-# Text Message Handler
-# ─────────────────────────────────────────────
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
-        return
-
-    chat_id = update.effective_chat.id
-    text = update.message.text.strip()
-
-    # Ayar inputu bekleniyor mu?
-    awaiting_key = f"awaiting_{chat_id}"
-    if awaiting_key in context.user_data:
-        field = context.user_data.pop(awaiting_key)
-        cfg = db.get_group_config(chat_id)
-
-        if field == "min_buy":
-            try:
-                val = float(text)
-                cfg["min_buy"] = val
-                db.save_group_config(chat_id, cfg)
-                await update.message.reply_text(f"✅ Min alım ${val} olarak ayarlandı.")
-            except ValueError:
-                await update.message.reply_text("❌ Geçerli bir sayı girin. Örnek: 10")
+    elif data.startswith("rmtoken_"):
+        ca = data.replace("rmtoken_", "")
+        removed = db.remove_token(chat_id, ca)
+        if removed:
+            await query.edit_message_text(f"✅ Token silindi:\n`{ca}`", parse_mode="Markdown")
         else:
-            cfg[field] = text
-            db.save_group_config(chat_id, cfg)
-            labels = {"tg_link": "Telegram linki", "web_link": "Website", "x_link": "X linki", "emoji": "Emoji"}
-            await update.message.reply_text(f"✅ {labels.get(field, field)} kaydedildi!")
+            await query.edit_message_text("❌ Token bulunamadı.")
+
+# ─── Mesaj handler (state akışı) ──────────────────────────────────────────────
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+
+    if user_id not in user_states:
         return
 
-    # CA bekleniyor mu? (setup/addtoken sonrası)
-    pending_chain = context.user_data.get("pending_chain")
-    pending_chat = context.user_data.get("pending_chat_id")
+    state = user_states[user_id]
+    action = state.get("action")
 
-    if pending_chain and pending_chat == chat_id:
-        if is_valid_ca(text, pending_chain):
-            db.add_token(chat_id, text, pending_chain)
-            context.user_data.pop("pending_chain", None)
-            context.user_data.pop("pending_chat_id", None)
-            await update.message.reply_text(
-                f"✅ *Token eklendi!*\n\n"
-                f"🪙 CA: `{text}`\n"
-                f"🌐 Zincir: {pending_chain.upper()}\n\n"
-                f"Alımlar izleniyor 🚀",
-                parse_mode="Markdown"
-            )
+    # CA bekleniyor (setup akışı)
+    if action == "awaiting_ca":
+        ca = update.message.text.strip()
+        chain = state.get("chain")
+        target_chat = state.get("chat_id", chat_id)
+
+        if len(ca) < 20:
+            await update.message.reply_text("❌ Geçersiz CA. Lütfen doğru contract adresini girin.")
             return
 
-    # Otomatik CA algılama
-    for word in text.split():
-        for chain in ["eth", "bsc", "base", "sol"]:
-            if is_valid_ca(word, chain):
-                tokens = db.get_tokens(chat_id)
-                if not any(t['ca'].lower() == word.lower() for t in tokens):
-                    keyboard = [[
-                        InlineKeyboardButton(
-                            f"✅ {chain.upper()} olarak ekle",
-                            callback_data=f"autoaddtoken_x_{chain}_{word}"
-                        )
-                    ]]
-                    await update.message.reply_text(
-                        f"🔍 *CA tespit edildi!*\n`{word}`\n\nBu token'ı eklemek ister misiniz?",
-                        reply_markup=InlineKeyboardMarkup(keyboard),
-                        parse_mode="Markdown"
-                    )
-                return
+        added = db.add_token(target_chat, ca, chain)
+        del user_states[user_id]
 
-def is_valid_ca(ca: str, chain: str) -> bool:
-    ca = ca.strip()
-    if chain in ("eth", "bsc", "base"):
-        return bool(re.match(r'^0x[0-9a-fA-F]{40}$', ca))
-    elif chain == "sol":
-        return bool(re.match(r'^[1-9A-HJ-NP-Za-km-z]{32,44}$', ca))
-    return False
+        if added:
+            await update.message.reply_text(
+                f"✅ *Token eklendi!*\n\n"
+                f"⛓ Zincir: {chain.upper()}\n"
+                f"📋 CA: `{ca}`\n\n"
+                f"Alımlar artık bu gruba bildirilecek.",
+                parse_mode="Markdown"
+            )
+        else:
+            await update.message.reply_text("⚠️ Bu token zaten ekli.")
 
-# ─────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────
-async def main():
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token:
-        raise ValueError("❌ TELEGRAM_BOT_TOKEN bulunamadı! .env dosyasını kontrol edin.")
+    elif action == "set_tg":
+        val = update.message.text.strip()
+        db.set_group_config(state["chat_id"], "tg_link", val)
+        del user_states[user_id]
+        await update.message.reply_text(f"✅ Telegram linki ayarlandı: {val}")
 
-    app = Application.builder().token(token).build()
+    elif action == "set_web":
+        val = update.message.text.strip()
+        db.set_group_config(state["chat_id"], "web_link", val)
+        del user_states[user_id]
+        await update.message.reply_text(f"✅ Website linki ayarlandı: {val}")
 
+    elif action == "set_x":
+        val = update.message.text.strip()
+        db.set_group_config(state["chat_id"], "x_link", val)
+        del user_states[user_id]
+        await update.message.reply_text(f"✅ X linki ayarlandı: {val}")
+
+    elif action == "set_emoji":
+        val = update.message.text.strip()
+        db.set_group_config(state["chat_id"], "emoji", val)
+        del user_states[user_id]
+        await update.message.reply_text(f"✅ Emoji ayarlandı: {val}")
+
+    elif action == "set_minbuy":
+        try:
+            val = float(update.message.text.strip().replace("$", ""))
+            db.set_group_config(state["chat_id"], "min_buy", val)
+            del user_states[user_id]
+            await update.message.reply_text(f"✅ Minimum alım: ${val}")
+        except ValueError:
+            await update.message.reply_text("❌ Geçersiz miktar. Sadece sayı girin: örnek 50")
+
+    elif action == "set_media":
+        msg = update.message
+        file_id = None
+        media_type = None
+
+        if msg.animation:
+            file_id = msg.animation.file_id
+            media_type = "animation"
+        elif msg.video:
+            file_id = msg.video.file_id
+            media_type = "video"
+        elif msg.photo:
+            file_id = msg.photo[-1].file_id
+            media_type = "photo"
+
+        if file_id:
+            db.set_group_config(state["chat_id"], "media_file_id", file_id)
+            db.set_group_config(state["chat_id"], "media_type", media_type)
+            del user_states[user_id]
+            await update.message.reply_text(f"✅ Medya yüklendi! ({media_type})")
+        else:
+            await update.message.reply_text("❌ GIF, video veya fotoğraf gönderin.")
+
+
+def register_handlers(app: Application):
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
@@ -463,16 +378,9 @@ async def main():
     app.add_handler(CommandHandler("draw", draw_cmd))
     app.add_handler(CommandHandler("setup", setup_cmd))
     app.add_handler(CommandHandler("settings", settings_cmd))
-
     app.add_handler(CallbackQueryHandler(callback_handler))
-    app.add_handler(MessageHandler(filters.ANIMATION | filters.VIDEO, media_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-
-    monitor = ChainMonitor(db, app.bot, buy_alert_handler)
-    asyncio.create_task(monitor.start_monitoring())
-
-    logger.info("🦊 IRVUS Buy Bot başlatıldı!")
-    await app.run_polling(drop_pending_updates=True)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND | filters.ANIMATION | filters.VIDEO | filters.PHOTO,
+        message_handler
+    ))
+        
