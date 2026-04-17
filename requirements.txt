@@ -1,4 +1,4 @@
-python-telegram-bot==13.15
+python-telegram-bot==20.8
 openai
 python-dotenv
 aiosqlite
@@ -7,6 +7,3 @@ aiohttp
 requests
 web3
 eth-utils
-base58
-solders
-solana
