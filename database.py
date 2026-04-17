@@ -7,101 +7,59 @@ DB_FILE = "data.json"
 
 class Database:
     def __init__(self):
-        # Dosya yoksa oluştur, varsa dokunma
         if not os.path.exists(DB_FILE):
-            try:
-                with open(DB_FILE, "w") as f:
-                    json.dump({}, f)
-            except Exception as e:
-                logger.error(f"DB oluşturma hatası: {e}")
+            self._save({})
 
     def _load(self):
         try:
             if not os.path.exists(DB_FILE): return {}
             with open(DB_FILE, "r") as f:
-                content = f.read()
-                return json.loads(content) if content else {}
-        except Exception as e:
-            logger.error(f"DB yükleme hatası: {e}")
-            return {}
+                return json.load(f)
+        except: return {}
 
     def _save(self, data):
-        try:
-            with open(DB_FILE, "w") as f:
-                json.dump(data, f, indent=2)
-        except Exception as e:
-            logger.error(f"DB kaydetme hatası: {e}")
+        with open(DB_FILE, "w") as f:
+            json.dump(data, f, indent=2)
 
     def get_group_config(self, chat_id: int) -> dict:
         data = self._load()
-        key = str(chat_id)
-        if key not in data:
-            data[key] = {
-                "tg_link": None,
-                "web_link": None,
-                "x_link": None,
-                "emoji": "🟢",
-                "min_buy": 0,
-                "media_file_id": None,
-                "media_type": None,
-                "tokens": []
-            }
+        k = str(chat_id)
+        if k not in data:
+            data[k] = {"emoji": "🟢", "min_buy": 0, "tokens": []}
             self._save(data)
-        return data[key]
+        return data[k]
 
     def set_group_config(self, chat_id: int, key: str, value):
         data = self._load()
-        k = str(chat_id)
-        if k not in data:
-            # Config yoksa oluştur
-            self.get_group_config(chat_id)
-            data = self._load()
-        data[k][key] = value
-        self._save(data)
+        if str(chat_id) in data:
+            data[str(chat_id)][key] = value
+            self._save(data)
 
     def get_tokens(self, chat_id: int) -> list:
-        cfg = self.get_group_config(chat_id)
-        return cfg.get("tokens", [])
+        return self.get_group_config(chat_id).get("tokens", [])
 
-    def add_token(self, chat_id: int, ca: str, chain: str):
+    def add_token(self, chat_id, ca, chain):
         data = self._load()
         k = str(chat_id)
-        if k not in data:
-            self.get_group_config(chat_id)
-            data = self._load()
-        
+        if k not in data: self.get_group_config(chat_id); data = self._load()
         tokens = data[k].get("tokens", [])
-        # Aynı CA varsa ekleme
-        for t in tokens:
-            if t["ca"].lower() == ca.lower():
-                return False
-                
+        if any(t['ca'] == ca for t in tokens): return False
         tokens.append({"ca": ca, "chain": chain})
         data[k]["tokens"] = tokens
         self._save(data)
         return True
 
-    def remove_token(self, chat_id: int, ca: str):
+    def remove_token(self, chat_id, ca):
         data = self._load()
         k = str(chat_id)
-        if k not in data: return False
-        
-        tokens = data[k].get("tokens", [])
-        new_tokens = [t for t in tokens if t["ca"].lower() != ca.lower()]
-        data[k]["tokens"] = new_tokens
-        self._save(data)
-        return True
+        if k in data:
+            data[k]["tokens"] = [t for t in data[k]["tokens"] if t["ca"] != ca]
+            self._save(data)
+            return True
+        return False
 
-    def get_all_groups_with_tokens(self) -> list:
+    def get_all_groups_with_tokens(self):
         data = self._load()
-        result = []
-        if not data: return [] # Eğer data None ise boş liste dön
-        
-        for chat_id, cfg in data.items():
-            if isinstance(cfg, dict) and cfg.get("tokens"):
-                try:
-                    result.append({"chat_id": int(chat_id), "config": cfg})
-                except ValueError:
-                    continue
-        return result
-        
+        return [{"chat_id": int(k), "config": v} for k, v in data.items() if v.get("tokens")]
+
+db = Database()
