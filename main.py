@@ -1,61 +1,53 @@
 import os
-import sys
-import signal
 import asyncio
 import logging
 import threading
+import nest_asyncio
 from flask import Flask
-from waitress import serve as waitress_serve
-from telegram import Update
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import Application
+from bot import register_handlers
+from chain_monitor import ChainMonitor
 
-# Dosya yolları için
-sys.path.insert(0, os.path.dirname(__file__))
-from database import get_all_group_chat_ids, get_tokens, get_group
-from tracker import tracking_loop
-
-# Loglama Ayarı
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+nest_asyncio.apply()
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-
-# Flask Health Check (Render için)
-health_app = Flask(__name__)
-@health_app.route("/")
+app_flask = Flask(__name__)
+@app_flask.route('/')
 def health(): return "OK", 200
 
-def run_health_server():
+def run_flask():
     port = int(os.environ.get("PORT", 10000))
-    waitress_serve(health_app, host="0.0.0.0", port=port)
+    app_flask.run(host='0.0.0.0', port=port)
 
-# Bot Komutları ve Mesaj Yönetimi (Burayı mevcut komutlarınla doldurabilirsin)
-# ... (Önceki main.py'deki komut handlerların burada olmalı) ...
-
-def main():
-    if not BOT_TOKEN:
-        logger.error("BOT_TOKEN BULUNAMADI!")
+async def main():
+    token = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN")
+    if not token:
+        logger.error("BOT_TOKEN bulunamadı!")
         return
 
-    # 1. Health Server'ı ayrı kolda başlat
-    threading.Thread(target=run_health_server, daemon=True).start()
+    threading.Thread(target=run_flask, daemon=True).start()
 
-    # 2. Application kur
-    app = Application.builder().token(BOT_TOKEN).build()
-
-    # 3. Handlerları ekle (Burada senin mevcut handlerların olmalı)
-    # app.add_handler(CommandHandler("start", start_command)) vs.
-
-    # 4. Takip Döngüsünü Başlat
-    async def post_init(application):
-        asyncio.create_task(tracking_loop(application.bot, get_all_group_chat_ids))
-        logger.info("✅ Takip görevi arka planda başlatıldı.")
-
-    app.post_init = post_init
-
-    logger.info("🤖 Bot başlatılıyor...")
-    app.run_polling(drop_pending_updates=True)
+    app = Application.builder().token(token).build()
+    register_handlers(app)
+    
+    monitor = ChainMonitor(app)
+    
+    async with app:
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling(drop_pending_updates=True)
+        
+        # Alım takibini başlat
+        monitor_task = asyncio.create_task(monitor.start())
+        
+        logger.info("✅ Bot ve İzleme Motoru Aktif!")
+        try:
+            await asyncio.Event().wait()
+        finally:
+            monitor_task.cancel()
+            await app.stop()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
     
