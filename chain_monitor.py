@@ -1,214 +1,247 @@
-import os
-import asyncio
 import aiohttp
+import asyncio
 import logging
-from typing import Optional
+import os
+from database import Database
 
 logger = logging.getLogger(__name__)
+db = Database()
 
-# Free RPC endpoints
-RPC_ENDPOINTS = {
-    "eth":  "https://ethereum.publicnode.com",
-    "bsc":  "https://bsc-dataseed.binance.org",
-    "base": "https://mainnet.base.org",
-}
+# Son görülen tx hash'leri (tekrar bildirimi önle)
+seen_txs = set()
 
-# Free API endpoints
-DEXSCREENER_API = "https://api.dexscreener.com/latest/dex/tokens"
-SOLANA_TX_API   = "https://api.mainnet-beta.solana.com"
-BIRDEYE_API     = "https://public-api.birdeye.so/defi/txs/token"
+# ─── Fiyat & MCAP çek ─────────────────────────────────────────────────────────
+async def get_token_info_sol(ca: str) -> dict:
+    """DexScreener'dan Solana token bilgisi çek"""
+    try:
+        url = f"https://api.dexscreener.com/latest/dex/tokens/{ca}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    pairs = data.get("pairs", [])
+                    if pairs:
+                        p = pairs[0]
+                        return {
+                            "name": p.get("baseToken", {}).get("name", "Token"),
+                            "symbol": p.get("baseToken", {}).get("symbol", "???"),
+                            "price_usd": float(p.get("priceUsd", 0)),
+                            "mcap": p.get("marketCap", 0),
+                            "price_native": float(p.get("priceNative", 0)),
+                        }
+    except Exception as e:
+        logger.error(f"Token info error SOL {ca}: {e}")
+    return {}
+
+async def get_token_info_evm(ca: str, chain: str) -> dict:
+    """DexScreener'dan EVM token bilgisi çek"""
+    chain_map = {"eth": "ethereum", "bsc": "bsc", "base": "base"}
+    dex_chain = chain_map.get(chain, chain)
+    try:
+        url = f"https://api.dexscreener.com/latest/dex/tokens/{ca}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    pairs = data.get("pairs", [])
+                    for p in pairs:
+                        if p.get("chainId", "").lower() == dex_chain:
+                            return {
+                                "name": p.get("baseToken", {}).get("name", "Token"),
+                                "symbol": p.get("baseToken", {}).get("symbol", "???"),
+                                "price_usd": float(p.get("priceUsd", 0)),
+                                "mcap": p.get("marketCap", 0),
+                                "price_native": float(p.get("priceNative", 0)),
+                            }
+    except Exception as e:
+        logger.error(f"Token info error EVM {ca}: {e}")
+    return {}
+
+# ─── Solana alım tespiti ───────────────────────────────────────────────────────
+async def get_sol_buys(ca: str) -> list:
+    """Solana: DexScreener trades endpoint"""
+    buys = []
+    try:
+        url = f"https://api.dexscreener.com/latest/dex/tokens/{ca}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    pairs = data.get("pairs", [])
+                    if not pairs:
+                        return []
+                    pair_addr = pairs[0].get("pairAddress", "")
+                    price_usd = float(pairs[0].get("priceUsd", 0))
+                    name = pairs[0].get("baseToken", {}).get("name", "Token")
+                    symbol = pairs[0].get("baseToken", {}).get("symbol", "???")
+                    mcap = pairs[0].get("marketCap", 0)
+
+        # Trades çek
+        trades_url = f"https://api.dexscreener.com/latest/dex/trades/{pair_addr}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(trades_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status == 200:
+                    trades = await resp.json()
+                    for tx in trades:
+                        if tx.get("type") != "buy":
+                            continue
+                        tx_hash = tx.get("txHash", "")
+                        if tx_hash in seen_txs:
+                            continue
+                        seen_txs.add(tx_hash)
+                        if len(seen_txs) > 5000:
+                            seen_txs.clear()
+
+                        amount_usd = float(tx.get("amountUsd", 0))
+                        amount_token = float(tx.get("amount1", 0))
+
+                        buys.append({
+                            "tx_hash": tx_hash,
+                            "amount_usd": amount_usd,
+                            "amount_token": amount_token,
+                            "price_usd": price_usd,
+                            "mcap": mcap,
+                            "name": name,
+                            "symbol": symbol,
+                            "chain": "sol",
+                            "ca": ca,
+                        })
+    except Exception as e:
+        logger.error(f"SOL trades error {ca}: {e}")
+    return buys
+
+async def get_evm_buys(ca: str, chain: str) -> list:
+    """EVM zincirler: DexScreener trades"""
+    buys = []
+    chain_map = {"eth": "ethereum", "bsc": "bsc", "base": "base"}
+    dex_chain = chain_map.get(chain, chain)
+    try:
+        url = f"https://api.dexscreener.com/latest/dex/tokens/{ca}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    pairs = data.get("pairs", [])
+                    pair_addr = None
+                    price_usd = 0
+                    name = "Token"
+                    symbol = "???"
+                    mcap = 0
+                    for p in pairs:
+                        if p.get("chainId", "").lower() == dex_chain:
+                            pair_addr = p.get("pairAddress", "")
+                            price_usd = float(p.get("priceUsd", 0))
+                            name = p.get("baseToken", {}).get("name", "Token")
+                            symbol = p.get("baseToken", {}).get("symbol", "???")
+                            mcap = p.get("marketCap", 0)
+                            break
+                    if not pair_addr:
+                        return []
+
+        trades_url = f"https://api.dexscreener.com/latest/dex/trades/{pair_addr}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(trades_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status == 200:
+                    trades = await resp.json()
+                    for tx in trades:
+                        if tx.get("type") != "buy":
+                            continue
+                        tx_hash = tx.get("txHash", "")
+                        if tx_hash in seen_txs:
+                            continue
+                        seen_txs.add(tx_hash)
+
+                        amount_usd = float(tx.get("amountUsd", 0))
+                        amount_token = float(tx.get("amount1", 0))
+
+                        buys.append({
+                            "tx_hash": tx_hash,
+                            "amount_usd": amount_usd,
+                            "amount_token": amount_token,
+                            "price_usd": price_usd,
+                            "mcap": mcap,
+                            "name": name,
+                            "symbol": symbol,
+                            "chain": chain,
+                            "ca": ca,
+                        })
+    except Exception as e:
+        logger.error(f"EVM trades error {ca} {chain}: {e}")
+    return buys
 
 
 class ChainMonitor:
-    def __init__(self, db, bot, buy_alert):
-        self.db = db
-        self.bot = bot
-        self.buy_alert = buy_alert
-        self.running = True
+    def __init__(self, application):
+        self.application = application
+        self.running = False
 
-    async def start_monitoring(self):
-        """Ana monitoring döngüsü"""
-        logger.info("🔍 Chain monitoring başlatıldı")
+    async def start(self):
+        self.running = True
+        logger.info("ChainMonitor başlatıldı.")
         while self.running:
             try:
-                groups = self.db.get_all_groups_with_tokens()
-                tasks = []
-                for group in groups:
-                    for token in group["tokens"]:
-                        tasks.append(
-                            self.check_token_buys(
-                                group["chat_id"],
-                                token["ca"],
-                                token["chain"],
-                                group["config"]
-                            )
-                        )
-                if tasks:
-                    await asyncio.gather(*tasks, return_exceptions=True)
+                await self._check_all_groups()
             except Exception as e:
-                logger.error(f"Monitoring ana döngü hatası: {e}")
-            await asyncio.sleep(15)  # Her 15 saniyede kontrol
+                logger.error(f"Monitor loop error: {e}")
+            await asyncio.sleep(15)  # 15 saniyede bir kontrol
 
-    async def check_token_buys(self, chat_id: int, ca: str, chain: str, config: dict):
-        """Belirli bir token için yeni alımları kontrol et"""
+    async def _check_all_groups(self):
+        groups = db.get_all_groups_with_tokens()
+        for group in groups:
+            chat_id = group["chat_id"]
+            cfg = group["config"]
+            tokens = cfg.get("tokens", [])
+            min_buy = float(cfg.get("min_buy", 0))
+
+            for token in tokens:
+                ca = token["ca"]
+                chain = token["chain"]
+
+                if chain == "sol":
+                    buys = await get_sol_buys(ca)
+                else:
+                    buys = await get_evm_buys(ca, chain)
+
+                for buy in buys:
+                    if buy["amount_usd"] < min_buy:
+                        continue
+                    await self._send_buy_alert(chat_id, cfg, buy)
+
+    async def _send_buy_alert(self, chat_id: int, cfg: dict, buy: dict):
+        from buy_alert import build_buy_message
         try:
-            if chain == "sol":
-                await self.check_solana_buys(chat_id, ca, config)
+            text, emoji_bar = build_buy_message(buy, cfg)
+            media_file_id = cfg.get("media_file_id")
+            media_type = cfg.get("media_type", "photo")
+
+            if media_file_id:
+                if media_type == "animation":
+                    await self.application.bot.send_animation(
+                        chat_id=chat_id,
+                        animation=media_file_id,
+                        caption=text,
+                        parse_mode="Markdown"
+                    )
+                elif media_type == "video":
+                    await self.application.bot.send_video(
+                        chat_id=chat_id,
+                        video=media_file_id,
+                        caption=text,
+                        parse_mode="Markdown"
+                    )
+                else:
+                    await self.application.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=media_file_id,
+                        caption=text,
+                        parse_mode="Markdown"
+                    )
             else:
-                await self.check_evm_buys(chat_id, ca, chain, config)
+                await self.application.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    parse_mode="Markdown"
+                )
         except Exception as e:
-            logger.error(f"Token kontrol hatası {ca} ({chain}): {e}")
-
-    # ─────────────────────────────────────────────
-    # DexScreener ile EVM (ETH/BSC/BASE) buy tespiti
-    # ─────────────────────────────────────────────
-    async def check_evm_buys(self, chat_id: int, ca: str, chain: str, config: dict):
-        url = f"{DEXSCREENER_API}/{ca}"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status != 200:
-                    return
-                data = await resp.json()
-
-        pairs = data.get("pairs", [])
-        if not pairs:
-            return
-
-        # En yüksek likiditeye sahip pair'i seç
-        pair = max(pairs, key=lambda x: float(x.get("liquidity", {}).get("usd", 0) or 0))
-
-        # Son tx'leri DexScreener'dan al
-        pair_address = pair.get("pairAddress", "")
-        if not pair_address:
-            return
-
-        await self.fetch_dexscreener_txs(chat_id, ca, chain, config, pair, pair_address)
-
-    async def fetch_dexscreener_txs(self, chat_id, ca, chain, config, pair_info, pair_address):
-        """DexScreener trades endpoint'inden son alımları al"""
-        # DexScreener trades API
-        chain_map = {"eth": "ethereum", "bsc": "bsc", "base": "base"}
-        ds_chain = chain_map.get(chain, chain)
-        url = f"https://api.dexscreener.com/latest/dex/pairs/{ds_chain}/{pair_address}"
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status != 200:
-                    return
-                data = await resp.json()
-
-        pair = data.get("pair", data.get("pairs", [{}])[0] if data.get("pairs") else {})
-        if not pair:
-            return
-
-        # Token bilgileri
-        base_token = pair.get("baseToken", {})
-        token_name = base_token.get("name", "Unknown")
-        token_symbol = base_token.get("symbol", "???")
-        price_usd = float(pair.get("priceUsd", 0) or 0)
-        mcap = pair.get("fdv") or pair.get("marketCap", 0)
-        if mcap:
-            mcap = float(mcap)
-
-        # Txns verisi (son alımları simüle et - DexScreener volume'dan)
-        txns = pair.get("txns", {})
-        buys_5m = txns.get("m5", {}).get("buys", 0)
-
-        last_tx_key = f"{ca}_{chain}"
-        last_sent = self.db.get_last_tx(chat_id, last_tx_key)
-        current_marker = f"{pair.get('volume',{}).get('m5',0)}_{buys_5m}"
-
-        if last_sent == current_marker or buys_5m == 0:
-            return
-
-        # Min buy kontrolü
-        min_buy = float(config.get("min_buy", 0))
-        volume_5m = float(pair.get("volume", {}).get("m5", 0) or 0)
-
-        if volume_5m < min_buy and min_buy > 0:
-            return
-
-        # Alım miktarını hesapla (ortalama)
-        avg_buy_usd = volume_5m / buys_5m if buys_5m > 0 else volume_5m
-        tokens_received = avg_buy_usd / price_usd if price_usd > 0 else 0
-
-        tx_data = {
-            "token_name": token_name,
-            "token_symbol": token_symbol,
-            "amount_usd": avg_buy_usd,
-            "tokens_received": tokens_received,
-            "mcap": mcap,
-            "price_usd": price_usd,
-            "chain": chain,
-            "ca": ca,
-            "tx_hash": current_marker,
-            "pair_url": pair.get("url", ""),
-        }
-
-        self.db.set_last_tx(chat_id, last_tx_key, current_marker)
-        await self.buy_alert.send_buy_alert(self.bot, chat_id, tx_data, config)
-
-    # ─────────────────────────────────────────────
-    # Solana buy tespiti (Birdeye veya DexScreener)
-    # ─────────────────────────────────────────────
-    async def check_solana_buys(self, chat_id: int, ca: str, config: dict):
-        url = f"{DEXSCREENER_API}/{ca}"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status != 200:
-                    return
-                data = await resp.json()
-
-        pairs = data.get("pairs", [])
-        if not pairs:
-            return
-
-        pair = max(pairs, key=lambda x: float(x.get("liquidity", {}).get("usd", 0) or 0))
-        pair_address = pair.get("pairAddress", "")
-        if not pair_address:
-            return
-
-        await self.fetch_solana_txs(chat_id, ca, config, pair)
-
-    async def fetch_solana_txs(self, chat_id, ca, config, pair):
-        """Solana token alımlarını işle"""
-        base_token = pair.get("baseToken", {})
-        token_name = base_token.get("name", "Unknown")
-        token_symbol = base_token.get("symbol", "???")
-        price_usd = float(pair.get("priceUsd", 0) or 0)
-        mcap = float(pair.get("fdv") or pair.get("marketCap", 0) or 0)
-
-        txns = pair.get("txns", {})
-        buys_5m = txns.get("m5", {}).get("buys", 0)
-        volume_5m = float(pair.get("volume", {}).get("m5", 0) or 0)
-
-        last_tx_key = f"{ca}_sol"
-        last_sent = self.db.get_last_tx(chat_id, last_tx_key)
-        current_marker = f"{volume_5m}_{buys_5m}"
-
-        if last_sent == current_marker or buys_5m == 0:
-            return
-
-        min_buy = float(config.get("min_buy", 0))
-        avg_buy_usd = volume_5m / buys_5m if buys_5m > 0 else volume_5m
-
-        if avg_buy_usd < min_buy and min_buy > 0:
-            return
-
-        tokens_received = avg_buy_usd / price_usd if price_usd > 0 else 0
-
-        tx_data = {
-            "token_name": token_name,
-            "token_symbol": token_symbol,
-            "amount_usd": avg_buy_usd,
-            "tokens_received": tokens_received,
-            "mcap": mcap,
-            "price_usd": price_usd,
-            "chain": "sol",
-            "ca": ca,
-            "tx_hash": current_marker,
-            "pair_url": pair.get("url", ""),
-        }
-
-        self.db.set_last_tx(chat_id, last_tx_key, current_marker)
-        await self.buy_alert.send_buy_alert(self.bot, chat_id, tx_data, config)
+            logger.error(f"Send alert error {chat_id}: {e}")
+                            
