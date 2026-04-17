@@ -1,6 +1,5 @@
 import os
 import asyncio
-import logging
 import threading
 import nest_asyncio
 from flask import Flask
@@ -9,8 +8,6 @@ from bot import register_handlers
 from chain_monitor import ChainMonitor
 
 nest_asyncio.apply()
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 app_flask = Flask(__name__)
 @app_flask.route('/')
@@ -29,7 +26,8 @@ async def main():
     monitor = ChainMonitor(app)
     
     async with app:
-        await app.initialize(); await app.start()
+        await app.initialize()
+        await app.start()
         asyncio.create_task(monitor.start())
         await app.updater.start_polling(drop_pending_updates=True)
         await asyncio.Event().wait()
