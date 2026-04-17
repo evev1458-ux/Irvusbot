@@ -1,13 +1,9 @@
-[project]
-name = "repl-nix-workspace"
-version = "0.1.0"
-description = "Add your description here"
-requires-python = ">=3.11"
 dependencies = [
     "aiohttp>=3.13.5",
     "aiosqlite>=0.22.1",
-    "openai>=2.32.0",
+    "google-generativeai",
     "python-dotenv>=1.2.2",
-    "python-telegram-bot[job-queue]>=22.7",
+    "python-telegram-bot[job-queue]>=20.7",
     "web3>=7.15.0",
+    "requests",
 ]
