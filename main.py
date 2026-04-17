@@ -1,37 +1,26 @@
-import os
-import asyncio
-import threading
-import nest_asyncio
+import os, asyncio, threading, nest_asyncio
 from flask import Flask
 from telegram.ext import Application
 from bot import register_handlers
 from chain_monitor import ChainMonitor
 
 nest_asyncio.apply()
-
-app_flask = Flask(__name__)
-@app_flask.route('/')
-def health(): return "OK", 200
-
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app_flask.run(host='0.0.0.0', port=port)
+app = Flask(__name__)
+@app.route('/')
+def h(): return "OK", 200
 
 async def main():
     token = os.getenv("TELEGRAM_BOT_TOKEN")
-    threading.Thread(target=run_flask, daemon=True).start()
+    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000))), daemon=True).start()
     
-    app = Application.builder().token(token).build()
-    register_handlers(app)
-    monitor = ChainMonitor(app)
+    bot_app = Application.builder().token(token).build()
+    register_handlers(bot_app)
+    monitor = ChainMonitor(bot_app)
     
-    async with app:
-        await app.initialize()
-        await app.start()
+    async with bot_app:
+        await bot_app.initialize(); await bot_app.start()
         asyncio.create_task(monitor.start())
-        await app.updater.start_polling(drop_pending_updates=True)
+        await bot_app.updater.start_polling(drop_pending_updates=True)
         await asyncio.Event().wait()
 
-if __name__ == "__main__":
-    asyncio.run(main())
-    
+if __name__ == "__main__": asyncio.run(main())
